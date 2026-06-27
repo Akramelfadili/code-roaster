@@ -1,0 +1,4 @@
+skips: []
+exclude_dirs:
+  - .git
+  - __pycache__
