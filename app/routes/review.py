@@ -25,7 +25,9 @@ async def review_code_stream(request: ReviewRequest, req: Request) -> StreamingR
 
 
 @router.post("/review/structured", response_model=StructuredReviewResponse)
-async def review_code_structured(request: ReviewRequest, req: Request) -> StructuredReviewResponse:
+async def review_code_structured(
+    request: ReviewRequest, req: Request
+) -> StructuredReviewResponse:
     if not request.code.strip():
         raise HTTPException(status_code=422, detail="Code must not be empty")
     result = await req.app.state.reviewer.review_structured(

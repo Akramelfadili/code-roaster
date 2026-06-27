@@ -1,0 +1,55 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(?!frontend/).*\.py$
+      - id: ruff-format
+        files: ^(?!frontend/).*\.py$
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.1.0
+    hooks:
+      - id: mypy
+        files: ^(?!frontend/).*\.py$
+        pass_filenames: false
+        args: [app/]
+        additional_dependencies:
+          - anthropic
+          - fastapi
+          - pydantic>=2.0
+          - python-dotenv
+          - pytest
+          - pytest-asyncio
+          - httpx
+
+  - repo: https://github.com/pycqa/bandit
+    rev: 1.9.4
+    hooks:
+      - id: bandit
+        args: [-c, .bandit]
+        files: ^(?!frontend/).*\.py$
+        exclude: ^app/tests/
+
+  - repo: local
+    hooks:
+      - id: frontend-eslint
+        name: ESLint (frontend)
+        language: system
+        entry: sh -c 'cd frontend && npm run lint'
+        files: ^frontend/src/.*\.[tj]sx?$
+        pass_filenames: false
+
+      - id: frontend-prettier
+        name: Prettier (frontend)
+        language: system
+        entry: sh -c 'cd frontend && npm run format:check'
+        files: ^frontend/src/.*\.[tj]sx?$
+        pass_filenames: false
