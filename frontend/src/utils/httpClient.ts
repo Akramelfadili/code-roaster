@@ -1,5 +1,6 @@
 import { HTTP_STATUS } from '@/constants/api';
 import { AppError, AppErrorCode } from '@/types/errors';
+import { parseApiError } from '@/utils/errors';
 
 function classifyHttpError(status: number, message: string): AppError {
   if (status === HTTP_STATUS.RateLimit) {
@@ -32,8 +33,12 @@ async function postRequest(
 }
 
 async function post<T>(endpoint: string, body: unknown): Promise<T> {
-  const response = await postRequest(endpoint, body);
-  return response.json() as Promise<T>;
+  try {
+    const response = await postRequest(endpoint, body);
+    return response.json() as Promise<T>;
+  } catch (error) {
+    throw parseApiError(error);
+  }
 }
 
 async function stream(
@@ -42,13 +47,15 @@ async function stream(
   onChunk: (chunk: string) => void,
   signal: AbortSignal
 ): Promise<void> {
-  const response = await postRequest(endpoint, body, signal);
-  if (!response.body) throw new AppError(AppErrorCode.ApiError, 'Response has no body');
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
+    const response = await postRequest(endpoint, body, signal);
+    if (!response.body)
+      throw new AppError(AppErrorCode.ApiError, 'Response has no body');
+
+    reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) {
@@ -58,8 +65,10 @@ async function stream(
       }
       onChunk(decoder.decode(value, { stream: true }));
     }
+  } catch (error) {
+    throw parseApiError(error);
   } finally {
-    reader.releaseLock();
+    reader?.releaseLock();
   }
 }
 

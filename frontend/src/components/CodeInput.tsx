@@ -1,3 +1,5 @@
+import type { JSX } from 'react/jsx-runtime';
+
 import { LANGUAGES } from '@/constants/review';
 import type { Language } from '@/types/review';
 

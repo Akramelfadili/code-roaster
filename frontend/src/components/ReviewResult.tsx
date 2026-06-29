@@ -1,3 +1,5 @@
+import type { JSX } from 'react/jsx-runtime';
+
 import { ScoreDisplay } from '@/components/ScoreDisplay';
 import { Section } from '@/components/Section';
 import { SeverityBadge } from '@/components/SeverityBadge';
