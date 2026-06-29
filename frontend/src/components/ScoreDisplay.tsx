@@ -1,3 +1,5 @@
+import type { JSX } from 'react/jsx-runtime';
+
 import { getScoreColor } from '@/utils/score';
 
 interface ScoreDisplayProps {

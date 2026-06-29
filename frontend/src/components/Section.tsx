@@ -1,3 +1,5 @@
+import type { JSX } from 'react/jsx-runtime';
+
 interface SectionProps {
   title: string;
   items: string[];
@@ -14,7 +16,10 @@ export function Section({ title, items, icon }: SectionProps): JSX.Element | nul
       </h3>
       <ul className="space-y-2">
         {items.map((item, i) => (
-          <li key={i} className="flex gap-2.5 text-sm text-gray-300 leading-snug">
+          <li
+            key={`${title}-${i}`}
+            className="flex gap-2.5 text-sm text-gray-300 leading-snug"
+          >
             <span className="text-gray-600 shrink-0 mt-0.5">—</span>
             <span>{item}</span>
           </li>

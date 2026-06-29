@@ -1,16 +1,12 @@
-import { useState } from 'react';
-
 import { CodeInput } from '@/components/CodeInput';
 import { ErrorMessage } from '@/components/ErrorMessage';
 import { Header } from '@/components/Header';
 import { ReviewResult } from '@/components/ReviewResult';
 import { StreamingText } from '@/components/StreamingText';
+import { useCodeForm } from '@/hooks/useCodeForm';
 import { useReview } from '@/hooks/useReview';
-import { Language } from '@/types/review';
 
 export default function App(): JSX.Element {
-  const [code, setCode] = useState('');
-  const [language, setLanguage] = useState<Language>(Language.Python);
   const {
     submitReview,
     streamingText,
@@ -20,13 +16,11 @@ export default function App(): JSX.Element {
     reviewResult,
   } = useReview();
 
+  const { code, setCode, language, setLanguage, handleSubmit } =
+    useCodeForm(submitReview);
+
   const isReviewInProgress = isStreaming || isLoadingStructured;
   const showStreamingText = streamingText.length > 0 && reviewResult === null;
-
-  function handleSubmit(): void {
-    if (!code.trim()) return;
-    void submitReview({ code, language });
-  }
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 font-sans">

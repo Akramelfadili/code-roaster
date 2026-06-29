@@ -3,8 +3,10 @@ from collections.abc import AsyncIterator
 from typing import Literal, TypedDict, cast
 
 import anthropic
+from anthropic import APIError
 from anthropic.types import TextBlock
 
+from app.exceptions import AIProviderError, MalformedAIResponseError
 from app.prompts.review import SECURITY_REVIEW_SYSTEM_PROMPT, STRUCTURED_REVIEW_TOOL
 
 
@@ -44,61 +46,75 @@ class CodeReviewer:
         self.model = "claude-sonnet-4-6"
 
     async def review(self, code: str, language: str = "python") -> str:
-        response = await self.client.messages.create(
-            model=self.model,
-            max_tokens=2048,
-            system=[
-                {
-                    "type": "text",
-                    "text": SECURITY_REVIEW_SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"Review this {language} code:\n\n```{language}\n{code}\n```"
-                    ),
-                }
-            ],
-        )
+        try:
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=2048,
+                system=[
+                    {
+                        "type": "text",
+                        "text": SECURITY_REVIEW_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Review this {language} code:"
+                            f"\n\n```{language}\n{code}\n```"
+                        ),
+                    }
+                ],
+            )
+        except APIError as e:
+            raise AIProviderError("Anthropic API call failed") from e
         block = response.content[0]
         if not isinstance(block, TextBlock):
-            raise TypeError(f"Expected TextBlock, got {type(block).__name__}")
+            raise MalformedAIResponseError(
+                f"Expected TextBlock, got {type(block).__name__}"
+            )
         return block.text
 
     async def review_structured(
         self, code: str, language: str = "python"
     ) -> StructuredReview:
-        response = await self.client.messages.create(
-            model=self.model,
-            max_tokens=2048,
-            system=[
-                {
-                    "type": "text",
-                    "text": (
-                        "You are an expert code reviewer. Perform a thorough "
-                        "review covering correctness, security, performance, "
-                        "and code quality. Use the provided tool to submit "
-                        "your structured findings."
-                    ),
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            tools=[STRUCTURED_REVIEW_TOOL],
-            tool_choice={"type": "tool", "name": "submit_code_review"},
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"Review this {language} code:\n\n```{language}\n{code}\n```"
-                    ),
-                }
-            ],
-        )
+        try:
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=2048,
+                system=[
+                    {
+                        "type": "text",
+                        "text": (
+                            "You are an expert code reviewer. Perform a thorough "
+                            "review covering correctness, security, performance, "
+                            "and code quality. Use the provided tool to submit "
+                            "your structured findings."
+                        ),
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                tools=[STRUCTURED_REVIEW_TOOL],
+                tool_choice={"type": "tool", "name": "submit_code_review"},
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Review this {language} code:"
+                            f"\n\n```{language}\n{code}\n```"
+                        ),
+                    }
+                ],
+            )
+        except APIError as e:
+            raise AIProviderError("Anthropic API call failed") from e
 
-        tool_use_block = next(b for b in response.content if b.type == "tool_use")
+        tool_use_block = next(
+            (b for b in response.content if b.type == "tool_use"), None
+        )
+        if tool_use_block is None:
+            raise MalformedAIResponseError("No tool_use block in response")
         data = cast(_ReviewToolOutput, tool_use_block.input)
         return StructuredReview(
             summary=data["summary"],

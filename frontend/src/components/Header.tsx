@@ -1,3 +1,5 @@
+import type { JSX } from 'react/jsx-runtime';
+
 export function Header(): JSX.Element {
   return (
     <header className="border-b border-gray-800 px-6 py-4">

@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { fetchReview, streamReview } from '@/api/review';
 import { useReview } from '@/hooks/useReview';
-import { AppError } from '@/types/errors';
+import { AppError, AppErrorCode } from '@/types/errors';
 import { Language, Severity } from '@/types/review';
 import type { ReviewResult } from '@/types/review';
 
@@ -72,7 +72,7 @@ describe('useReview', () => {
   });
 
   it('returns reviewError correctly on failure', async () => {
-    const streamError = new Error('Network error');
+    const streamError = new AppError(AppErrorCode.ApiError, 'Network error');
     vi.mocked(streamReview).mockRejectedValue(streamError);
 
     const { result } = renderHook(() => useReview(), { wrapper: createWrapper() });

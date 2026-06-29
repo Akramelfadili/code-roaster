@@ -1,3 +1,5 @@
+import type { JSX } from 'react/jsx-runtime';
+
 interface StreamingTextProps {
   text: string;
   isStreaming: boolean;

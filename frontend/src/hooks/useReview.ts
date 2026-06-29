@@ -4,7 +4,6 @@ import { useRef, useState } from 'react';
 import { fetchReview, streamReview } from '@/api/review';
 import type { AppError } from '@/types/errors';
 import type { ReviewRequest, ReviewResult, UseReviewReturn } from '@/types/review';
-import { parseApiError } from '@/utils/errors';
 
 export function useReview(): UseReviewReturn {
   const [streamingText, setStreamingText] = useState('');
@@ -18,7 +17,10 @@ export function useReview(): UseReviewReturn {
     error: structuredError,
     data: reviewResult,
     reset: resetStructured,
-  } = useMutation<ReviewResult, AppError, ReviewRequest>({ mutationFn: fetchReview });
+  } = useMutation<ReviewResult, AppError, ReviewRequest>({
+    mutationFn: fetchReview,
+    retry: 0,
+  });
 
   async function submitReview(request: ReviewRequest): Promise<void> {
     abortRef.current?.abort();
@@ -37,7 +39,7 @@ export function useReview(): UseReviewReturn {
       );
     } catch (e) {
       if (abortRef.current?.signal.aborted) return;
-      setStreamError(parseApiError(e));
+      setStreamError(e as AppError);
       setIsStreaming(false);
       return;
     }

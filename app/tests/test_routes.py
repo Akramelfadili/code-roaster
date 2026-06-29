@@ -25,7 +25,8 @@ class TestReview:
     async def test_empty_code_returns_422(self, client: AsyncClient) -> None:
         response = await client.post("/review", json={"code": "   "})
         assert response.status_code == 422
-        assert "empty" in response.json()["detail"].lower()
+        errors = response.json()["detail"]
+        assert any("empty" in e["msg"].lower() for e in errors)
 
     async def test_missing_language_defaults_to_python(
         self, client: AsyncClient, mock_reviewer: MagicMock
@@ -44,7 +45,8 @@ class TestReviewStream:
     async def test_empty_code_returns_422(self, client: AsyncClient) -> None:
         response = await client.post("/review/stream", json={"code": ""})
         assert response.status_code == 422
-        assert "empty" in response.json()["detail"].lower()
+        errors = response.json()["detail"]
+        assert any("empty" in e["msg"].lower() for e in errors)
 
 
 class TestReviewStructured:
@@ -74,4 +76,5 @@ class TestReviewStructured:
     async def test_empty_code_returns_422(self, client: AsyncClient) -> None:
         response = await client.post("/review/structured", json={"code": "  "})
         assert response.status_code == 422
-        assert "empty" in response.json()["detail"].lower()
+        errors = response.json()["detail"]
+        assert any("empty" in e["msg"].lower() for e in errors)

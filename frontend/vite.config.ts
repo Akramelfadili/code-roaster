@@ -24,7 +24,7 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
-    setupFiles: ['./src/test/setup.ts'],
+    setupFiles: ['./src/tests/setup.ts'],
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
