@@ -55,6 +55,14 @@ All commands run from the project root via `make`.
 | `make test-front` | Vitest suite in `frontend/` |
 | `make check-all` | Runs all checks (no format-back — it mutates) |
 
+## Error Handling
+
+- Input validation lives in Pydantic models (`field_validator`), not routes
+- Domain exceptions (`ReviewError`, `AIProviderError`, `MalformedAIResponseError`) live in `app/exceptions.py`
+- Routes never catch exceptions — they let them bubble up
+- Global handlers in `main.py` translate domain exceptions to HTTP responses
+- `reviewer.py` has zero knowledge of HTTP — it only raises domain exceptions
+
 ## Git Rules
 - Never commit directly to main
 - One branch per feature: `feature/`, `fix/`, `refactor/`

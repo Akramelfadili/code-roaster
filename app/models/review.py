@@ -1,11 +1,18 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ReviewRequest(BaseModel):
     code: str
     language: str = "python"
+
+    @field_validator("code")
+    @classmethod
+    def code_must_not_be_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Code must not be empty")
+        return v
 
 
 class ReviewResponse(BaseModel):

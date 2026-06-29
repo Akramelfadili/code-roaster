@@ -1,8 +1,17 @@
-.PHONY: lint-back format-back type-back security-back test-back \
+.PHONY: run run-back run-front \
+        lint-back format-back type-back security-back test-back \
         lint-front format-front type-front test-front \
         check-all
 
+# ── Dev ──────────────────────────────────────────────────────────────────────
+
+run:
+	honcho start
+
 # ── Backend ──────────────────────────────────────────────────────────────────
+
+run-back:
+	uvicorn app.main:app --reload
 
 lint-back:
 	ruff check app/
@@ -20,6 +29,9 @@ test-back:
 	cd app && pytest
 
 # ── Frontend ─────────────────────────────────────────────────────────────────
+
+run-front:
+	cd frontend && npm run dev
 
 lint-front:
 	cd frontend && npm run lint
