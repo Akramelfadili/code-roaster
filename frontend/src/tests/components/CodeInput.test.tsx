@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi } from 'vitest';
 
 import { CodeInput } from '@/components/CodeInput';
-import { LANGUAGES } from '@/constants/review';
+import { LANGUAGE_LABELS, LANGUAGES } from '@/constants/review';
 import { Language } from '@/types/review';
 
 const defaultProps = {
@@ -28,7 +28,9 @@ describe('CodeInput', () => {
     expect(select).toBeInTheDocument();
 
     LANGUAGES.forEach((lang) => {
-      expect(screen.getByRole('option', { name: lang })).toBeInTheDocument();
+      expect(
+        screen.getByRole('option', { name: LANGUAGE_LABELS[lang] })
+      ).toBeInTheDocument();
     });
   });
 

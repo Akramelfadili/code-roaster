@@ -55,6 +55,7 @@ class TestReviewStructured:
         assert response.status_code == 200
         data = response.json()
         for field in (
+            "detected_language",
             "summary",
             "severity",
             "score",

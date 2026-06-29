@@ -4,9 +4,13 @@ import { getScoreColor } from '@/utils/score';
 
 interface ScoreDisplayProps {
   score: number;
+  detectedLanguage?: string;
 }
 
-export function ScoreDisplay({ score }: ScoreDisplayProps): JSX.Element {
+export function ScoreDisplay({
+  score,
+  detectedLanguage,
+}: ScoreDisplayProps): JSX.Element {
   return (
     <div className="text-center shrink-0">
       <div className={`text-3xl font-bold tabular-nums ${getScoreColor(score)}`}>
@@ -16,6 +20,11 @@ export function ScoreDisplay({ score }: ScoreDisplayProps): JSX.Element {
       <div className="text-[10px] text-gray-600 uppercase tracking-widest mt-0.5">
         Score
       </div>
+      {detectedLanguage && (
+        <div className="text-[10px] text-gray-500 mt-1">
+          Detected: {detectedLanguage}
+        </div>
+      )}
     </div>
   );
 }

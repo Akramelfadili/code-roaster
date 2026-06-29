@@ -20,6 +20,7 @@ class ReviewResponse(BaseModel):
 
 
 class StructuredReviewResponse(BaseModel):
+    detected_language: str
     summary: str
     severity: Literal["low", "medium", "high", "critical"]
     score: int = Field(ge=1, le=10)

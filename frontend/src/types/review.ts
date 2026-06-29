@@ -10,6 +10,7 @@ export const Severity = {
 export type Severity = (typeof Severity)[keyof typeof Severity];
 
 export const Language = {
+  Auto: 'auto',
   Python: 'Python',
   JavaScript: 'JavaScript',
   TypeScript: 'TypeScript',
@@ -26,6 +27,7 @@ export interface ReviewRequest {
 }
 
 export interface ReviewResult {
+  detected_language?: string;
   summary: string;
   severity: Severity;
   score: number;
