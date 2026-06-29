@@ -7,10 +7,17 @@ from anthropic import APIError
 from anthropic.types import TextBlock
 
 from app.exceptions import AIProviderError, MalformedAIResponseError
-from app.prompts.review import SECURITY_REVIEW_SYSTEM_PROMPT, STRUCTURED_REVIEW_TOOL
+from app.prompts.review import (
+    SECURITY_REVIEW_SYSTEM_PROMPT,
+    STRUCTURED_REVIEW_SYSTEM_PROMPT,
+    STRUCTURED_REVIEW_TOOL,
+)
+
+_AUTO_LANGUAGE = "auto"
 
 
 class _ReviewToolOutput(TypedDict):
+    detected_language: str
     summary: str
     severity: Literal["low", "medium", "high", "critical"]
     score: int
@@ -23,6 +30,7 @@ class _ReviewToolOutput(TypedDict):
 class StructuredReview:
     def __init__(
         self,
+        detected_language: str,
         summary: str,
         severity: Literal["low", "medium", "high", "critical"],
         score: int,
@@ -31,6 +39,7 @@ class StructuredReview:
         suggestions: list[str],
         positives: list[str],
     ) -> None:
+        self.detected_language = detected_language
         self.summary = summary
         self.severity = severity
         self.score = score
@@ -44,6 +53,14 @@ class CodeReviewer:
     def __init__(self) -> None:
         self.client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         self.model = "claude-sonnet-4-6"
+
+    def _build_review_message(self, code: str, language: str) -> str:
+        if language == _AUTO_LANGUAGE:
+            return (
+                "Review this code (detect the language automatically):"
+                f"\n\n```\n{code}\n```"
+            )
+        return f"Review this {language} code:\n\n```{language}\n{code}\n```"
 
     async def review(self, code: str, language: str = "python") -> str:
         try:
@@ -60,10 +77,7 @@ class CodeReviewer:
                 messages=[
                     {
                         "role": "user",
-                        "content": (
-                            f"Review this {language} code:"
-                            f"\n\n```{language}\n{code}\n```"
-                        ),
+                        "content": self._build_review_message(code, language),
                     }
                 ],
             )
@@ -86,12 +100,7 @@ class CodeReviewer:
                 system=[
                     {
                         "type": "text",
-                        "text": (
-                            "You are an expert code reviewer. Perform a thorough "
-                            "review covering correctness, security, performance, "
-                            "and code quality. Use the provided tool to submit "
-                            "your structured findings."
-                        ),
+                        "text": STRUCTURED_REVIEW_SYSTEM_PROMPT,
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
@@ -100,10 +109,7 @@ class CodeReviewer:
                 messages=[
                     {
                         "role": "user",
-                        "content": (
-                            f"Review this {language} code:"
-                            f"\n\n```{language}\n{code}\n```"
-                        ),
+                        "content": self._build_review_message(code, language),
                     }
                 ],
             )
@@ -117,6 +123,7 @@ class CodeReviewer:
             raise MalformedAIResponseError("No tool_use block in response")
         data = cast(_ReviewToolOutput, tool_use_block.input)
         return StructuredReview(
+            detected_language=data["detected_language"],
             summary=data["summary"],
             severity=data["severity"],
             score=data["score"],
@@ -142,9 +149,7 @@ class CodeReviewer:
             messages=[
                 {
                     "role": "user",
-                    "content": (
-                        f"Review this {language} code:\n\n```{language}\n{code}\n```"
-                    ),
+                    "content": self._build_review_message(code, language),
                 }
             ],
         ) as stream:

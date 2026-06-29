@@ -15,7 +15,7 @@ export function useCodeForm(
   onSubmit: (request: ReviewRequest) => Promise<void>
 ): UseCodeFormReturn {
   const [code, setCode] = useState('');
-  const [language, setLanguage] = useState<Language>(Language.Python);
+  const [language, setLanguage] = useState<Language>(Language.Auto);
 
   function handleSubmit(): void {
     if (!code.trim()) return;

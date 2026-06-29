@@ -1,6 +1,6 @@
 import type { JSX } from 'react/jsx-runtime';
 
-import { LANGUAGES } from '@/constants/review';
+import { LANGUAGE_LABELS, LANGUAGES } from '@/constants/review';
 import type { Language } from '@/types/review';
 
 interface CodeInputProps {
@@ -36,7 +36,9 @@ export function CodeInput({
           onChange={(e) => onLanguageChange(e.target.value as Language)}
         >
           {LANGUAGES.map((lang) => (
-            <option key={lang}>{lang}</option>
+            <option key={lang} value={lang}>
+              {LANGUAGE_LABELS[lang]}
+            </option>
           ))}
         </select>
         <button

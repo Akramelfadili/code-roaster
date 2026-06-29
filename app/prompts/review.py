@@ -7,6 +7,13 @@ insecure dependencies.
 Ignore style, performance, and readability. Only report security issues.\
 """
 
+STRUCTURED_REVIEW_SYSTEM_PROMPT = (
+    "You are an expert code reviewer. Perform a thorough review covering "
+    "correctness, security, performance, and code quality. Use the provided "
+    "tool to submit your structured findings. Always populate detected_language "
+    "with the programming language you identify in the submitted code."
+)
+
 STRUCTURED_REVIEW_TOOL: anthropic.types.ToolParam = {
     "name": "submit_code_review",
     "description": (
@@ -16,6 +23,13 @@ STRUCTURED_REVIEW_TOOL: anthropic.types.ToolParam = {
     "input_schema": {
         "type": "object",
         "properties": {
+            "detected_language": {
+                "type": "string",
+                "description": (
+                    "The programming language of the submitted code "
+                    "(e.g. 'Python', 'TypeScript'). Always populate this field."
+                ),
+            },
             "summary": {
                 "type": "string",
                 "description": (
@@ -57,6 +71,7 @@ STRUCTURED_REVIEW_TOOL: anthropic.types.ToolParam = {
             },
         },
         "required": [
+            "detected_language",
             "summary",
             "severity",
             "score",

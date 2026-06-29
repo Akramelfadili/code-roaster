@@ -28,6 +28,7 @@ async def review_code_structured(
         code=request.code, language=request.language
     )
     return StructuredReviewResponse(
+        detected_language=result.detected_language,
         summary=result.summary,
         severity=result.severity,
         score=result.score,

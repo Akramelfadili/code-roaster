@@ -3,6 +3,7 @@ from app.reviewer import StructuredReview
 SAMPLE_CODE = "def add(a: int, b: int) -> int:\n    return a + b"
 
 SAMPLE_STRUCTURED_REVIEW = StructuredReview(
+    detected_language="Python",
     summary="Clean, readable function with no major issues.",
     severity="low",
     score=8,

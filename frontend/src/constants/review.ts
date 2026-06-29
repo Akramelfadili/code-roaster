@@ -2,6 +2,16 @@ import { Language, Severity } from '@/types/review';
 
 export const LANGUAGES = Object.values(Language);
 
+export const LANGUAGE_LABELS: Record<Language, string> = {
+  [Language.Auto]: 'Auto-detect',
+  [Language.Python]: 'Python',
+  [Language.JavaScript]: 'JavaScript',
+  [Language.TypeScript]: 'TypeScript',
+  [Language.Go]: 'Go',
+  [Language.Rust]: 'Rust',
+  [Language.Java]: 'Java',
+} as const satisfies Record<Language, string>;
+
 export const SEVERITY_STYLES = {
   [Severity.Low]: 'bg-green-950 text-green-400 border-green-800',
   [Severity.Medium]: 'bg-yellow-950 text-yellow-400 border-yellow-800',
