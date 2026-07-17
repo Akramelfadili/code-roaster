@@ -1,6 +1,13 @@
-import { Language, Severity } from '@/types/review';
+import { Language, ReviewMode, Severity } from '@/types/review';
 
 export const LANGUAGES = Object.values(Language);
+
+export const REVIEW_MODES = Object.values(ReviewMode);
+
+export const REVIEW_MODE_LABELS = {
+  [ReviewMode.Code]: 'Review Code',
+  [ReviewMode.PR]: 'Review PR',
+} as const satisfies Record<ReviewMode, string>;
 
 export const LANGUAGE_LABELS: Record<Language, string> = {
   [Language.Auto]: 'Auto-detect',

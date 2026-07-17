@@ -7,7 +7,8 @@ from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.reviewer import CodeReviewer
-from app.tests.mocks import SAMPLE_STRUCTURED_REVIEW
+from app.services.github import GitHubService
+from app.tests.mocks import SAMPLE_PR_DIFF, SAMPLE_PR_REF, SAMPLE_STRUCTURED_REVIEW
 
 
 @pytest.fixture
@@ -24,10 +25,23 @@ def mock_reviewer() -> MagicMock:
     return reviewer
 
 
+@pytest.fixture
+def mock_github_service() -> MagicMock:
+    service = MagicMock(spec=GitHubService)
+    service.client_id = "mock-client-id"
+    service.parse_pr_url = MagicMock(return_value=SAMPLE_PR_REF)
+    service.fetch_pr_diff = AsyncMock(return_value=SAMPLE_PR_DIFF)
+    service.exchange_code_for_token = AsyncMock(return_value="mock-access-token")
+    return service
+
+
 @pytest_asyncio.fixture
-async def client(mock_reviewer: MagicMock) -> AsyncIterator[AsyncClient]:
+async def client(
+    mock_reviewer: MagicMock, mock_github_service: MagicMock
+) -> AsyncIterator[AsyncClient]:
     # ASGITransport does not trigger the lifespan, so we set app.state directly.
     app.state.reviewer = mock_reviewer
+    app.state.github_service = mock_github_service
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as ac:

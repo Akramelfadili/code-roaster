@@ -12,6 +12,14 @@ function classifyHttpError(status: number, message: string): AppError {
   return new AppError(AppErrorCode.ApiError, message, status);
 }
 
+async function throwIfNotOk(response: Response): Promise<void> {
+  if (response.ok) return;
+  const data = await response.json().catch(() => ({}));
+  const message =
+    (data as { detail?: string }).detail ?? `Request failed (${response.status})`;
+  throw classifyHttpError(response.status, message);
+}
+
 async function postRequest(
   endpoint: string,
   body: unknown,
@@ -23,18 +31,23 @@ async function postRequest(
     body: JSON.stringify(body),
     signal,
   });
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    const message =
-      (data as { detail?: string }).detail ?? `Request failed (${response.status})`;
-    throw classifyHttpError(response.status, message);
-  }
+  await throwIfNotOk(response);
   return response;
 }
 
 async function post<T>(endpoint: string, body: unknown): Promise<T> {
   try {
     const response = await postRequest(endpoint, body);
+    return response.json() as Promise<T>;
+  } catch (error) {
+    throw parseApiError(error);
+  }
+}
+
+async function get<T>(endpoint: string): Promise<T> {
+  try {
+    const response = await fetch(endpoint);
+    await throwIfNotOk(response);
     return response.json() as Promise<T>;
   } catch (error) {
     throw parseApiError(error);
@@ -72,4 +85,4 @@ async function stream(
   }
 }
 
-export const httpClient = { post, stream };
+export const httpClient = { get, post, stream };

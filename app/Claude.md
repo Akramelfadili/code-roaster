@@ -7,12 +7,19 @@ Python 3.12, FastAPI, Anthropic SDK, Pydantic v2, conda environment
 ```
 app/
 ├── __init__.py
-├── models.py        # All Pydantic models
-├── reviewer.py      # CodeReviewer class — all AI logic lives here
+├── models/
+│   ├── review.py     # Review request/response models
+│   ├── pr.py         # PR review request models
+│   └── auth.py       # GitHub OAuth response models
+├── reviewer.py        # CodeReviewer class — all AI logic lives here
+├── services/
+│   └── github.py      # GitHubService — OAuth token exchange, PR URL parsing, diff fetch
 └── routes/
     ├── __init__.py
-    └── review.py    # All route handlers
-main.py              # App setup and lifespan only
+    ├── review.py       # /review, /review/stream, /review/structured, /health
+    ├── auth.py         # /auth/github, /auth/github/callback — GitHub OAuth
+    └── pr.py           # /review/pr — PR diff review
+main.py              # App setup, lifespan, and exception handlers only
 ```
 
 ## Imports
@@ -34,6 +41,12 @@ main.py              # App setup and lifespan only
 - Router prefix and tags on all routers
 - One router per domain (review, auth, etc.)
 
+## External API Calls
+- `httpx.AsyncClient` for all outbound HTTP calls (GitHub API, OAuth endpoints, etc.) — never the sync client, never `requests`
+- Wrap calls in a service class under `app/services/` — routes never call `httpx` directly
+- Accept an optional `transport: httpx.AsyncBaseTransport | None` on service constructors so tests can inject `httpx.MockTransport` instead of hitting the network
+- Translate HTTP status codes into domain exceptions inside the service (see `app/services/github.py`) — never let a raw `httpx` exception or status code reach a route
+
 ## Anthropic SDK Standards
 - Always use `claude-sonnet-4-6` unless there's a specific reason not to
 - Always include `cache_control: ephemeral` on system prompts
@@ -46,6 +59,8 @@ main.py              # App setup and lifespan only
 - Never let raw exceptions bubble up to the client
 - Always return structured error responses
 - Log errors with context (what failed, what inputs caused it)
+- GitHub domain exceptions (`app/exceptions.py`) map to HTTP status via global handlers in `main.py`:
+  - `InvalidPRUrlError` → 400, `GitHubAuthError` → 401, `PRNotFoundError` → 404, `GitHubRateLimitError` → 429, `GitHubError` (fallback, e.g. network failure) → 502
 
 ## Cost Optimization
 - Cache system prompts with `cache_control: ephemeral`
@@ -71,8 +86,12 @@ conda run -n code-roaster python -m pytest tests/ -v
 **Folder structure:**
 ```
 tests/
-├── conftest.py       # shared fixtures (mock_reviewer, client)
-└── test_routes.py    # one file per router
+├── conftest.py             # shared fixtures (mock_reviewer, mock_github_service, client)
+├── mocks.py                # shared mock data
+├── test_routes.py          # /review, /review/stream, /review/structured, /health
+├── test_auth.py            # /auth/github, /auth/github/callback
+├── test_pr.py              # /review/pr
+└── test_github_service.py  # GitHubService unit tests (URL parsing, diff fetch, OAuth exchange)
 ```
 
 **Async tests:** `pytest.ini` sets `asyncio_mode = auto` — no `@pytest.mark.asyncio` needed. All async test functions are picked up automatically.
@@ -81,6 +100,11 @@ tests/
 - Never instantiate a real `CodeReviewer` in tests — it requires `ANTHROPIC_API_KEY` and hits the API
 - `ASGITransport` does NOT trigger the FastAPI lifespan, so set `app.state.reviewer` directly in the fixture
 - Use `MagicMock(spec=CodeReviewer)` as the base; set `review` and `review_structured` as `AsyncMock`; set `review_stream` as `MagicMock(side_effect=async_gen_fn)` since it returns an async generator (not a coroutine)
+
+**Mocking GitHub calls:**
+- Never hit the real GitHub API in tests
+- At the route level: use `MagicMock(spec=GitHubService)` (the `mock_github_service` fixture), same pattern as `mock_reviewer` — set `app.state.github_service` in the `client` fixture
+- At the service level: inject `httpx.MockTransport(handler)` via `GitHubService(..., transport=...)` and assert on the returned data or raised domain exception
 
 **Naming:** `test_<what>_<expected_outcome>` — e.g. `test_empty_code_returns_422`, `test_happy_path_returns_all_fields`
 

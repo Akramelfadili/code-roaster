@@ -45,3 +45,22 @@ export interface UseReviewReturn {
   reviewError: AppError | null;
   reviewResult: ReviewResult | null;
 }
+
+export const ReviewMode = {
+  Code: 'code',
+  PR: 'pr',
+} as const;
+
+export type ReviewMode = (typeof ReviewMode)[keyof typeof ReviewMode];
+
+export interface PRReviewRequest {
+  prUrl: string;
+  githubToken: string;
+}
+
+export interface UsePRReviewReturn {
+  submitPRReview: (request: PRReviewRequest) => Promise<void>;
+  isLoadingPRReview: boolean;
+  prReviewError: AppError | null;
+  prReviewResult: ReviewResult | null;
+}

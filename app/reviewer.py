@@ -14,6 +14,7 @@ from app.prompts.review import (
 )
 
 _AUTO_LANGUAGE = "auto"
+_REQUIRED_REVIEW_FIELDS = ("summary", "severity", "score", "detected_language")
 
 
 class _ReviewToolOutput(TypedDict):
@@ -47,6 +48,14 @@ class StructuredReview:
         self.security_issues = security_issues
         self.suggestions = suggestions
         self.positives = positives
+
+
+def _require_review_fields(data: _ReviewToolOutput) -> None:
+    missing = [field for field in _REQUIRED_REVIEW_FIELDS if field not in data]
+    if missing:
+        raise MalformedAIResponseError(
+            f"Tool response missing required fields: {', '.join(missing)}"
+        )
 
 
 class CodeReviewer:
@@ -122,15 +131,16 @@ class CodeReviewer:
         if tool_use_block is None:
             raise MalformedAIResponseError("No tool_use block in response")
         data = cast(_ReviewToolOutput, tool_use_block.input)
+        _require_review_fields(data)
         return StructuredReview(
             detected_language=data["detected_language"],
             summary=data["summary"],
             severity=data["severity"],
             score=data["score"],
-            bugs=data["bugs"],
-            security_issues=data["security_issues"],
-            suggestions=data["suggestions"],
-            positives=data["positives"],
+            bugs=data.get("bugs", []),
+            security_issues=data.get("security_issues", []),
+            suggestions=data.get("suggestions", []),
+            positives=data.get("positives", []),
         )
 
     async def review_stream(
