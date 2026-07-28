@@ -1,9 +1,10 @@
-from app.models.pr import PRReviewRequest
-from app.models.review import ReviewRequest, ReviewResponse, StructuredReviewResponse
+from app.models.pr import PRReviewRequest, PullRequestRef
+from app.models.review import ReviewRequest, StructuredReview, StructuredReviewResponse
 
 __all__ = [
     "PRReviewRequest",
+    "PullRequestRef",
     "ReviewRequest",
-    "ReviewResponse",
+    "StructuredReview",
     "StructuredReviewResponse",
 ]

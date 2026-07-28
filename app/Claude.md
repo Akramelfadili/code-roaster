@@ -7,19 +7,22 @@ Python 3.12, FastAPI, Anthropic SDK, Pydantic v2, conda environment
 ```
 app/
 ├── __init__.py
+├── constants.py        # Cross-cutting shared values (e.g. Severity) — single source of truth for anything used by more than one of models/reviewer/prompts
+├── exceptions.py       # AppError base + all domain exceptions — see "Error Handling"
 ├── models/
-│   ├── review.py     # Review request/response models
-│   ├── pr.py         # PR review request models
-│   └── auth.py       # GitHub OAuth response models
-├── reviewer.py        # CodeReviewer class — all AI logic lives here
+│   ├── review.py        # Review request/response models
+│   └── pr.py             # PullRequestRef, PR review request models
 ├── services/
-│   └── github.py      # GitHubService — OAuth token exchange, PR URL parsing, diff fetch
+│   ├── reviewer.py        # CodeReviewer class — all AI logic lives here
+│   ├── github.py          # GitHubService — OAuth token exchange, PR URL parsing, diff fetch
+│   └── github_errors.py   # GitHub-specific error translation (raise_for_github_response, is_rate_limited)
 └── routes/
     ├── __init__.py
-    ├── review.py       # /review, /review/stream, /review/structured, /health
+    ├── review.py       # /review/stream, /review/structured
     ├── auth.py         # /auth/github, /auth/github/callback — GitHub OAuth
-    └── pr.py           # /review/pr — PR diff review
-main.py              # App setup, lifespan, and exception handlers only
+    ├── pr.py           # /review/pr — PR diff review
+    └── health.py       # /health
+main.py              # App setup, lifespan, logging config, and the single AppError handler
 ```
 
 ## Imports
@@ -42,10 +45,11 @@ main.py              # App setup, lifespan, and exception handlers only
 - One router per domain (review, auth, etc.)
 
 ## External API Calls
+- Any class that talks to an external API or SDK — the GitHub REST API, the Anthropic SDK, anything added later — lives under `app/services/`. No exceptions for how central it is to the product (`CodeReviewer` included): one flat rule beats a "core vs. adapter" distinction that only makes sense in hindsight
 - `httpx.AsyncClient` for all outbound HTTP calls (GitHub API, OAuth endpoints, etc.) — never the sync client, never `requests`
 - Wrap calls in a service class under `app/services/` — routes never call `httpx` directly
 - Accept an optional `transport: httpx.AsyncBaseTransport | None` on service constructors so tests can inject `httpx.MockTransport` instead of hitting the network
-- Translate HTTP status codes into domain exceptions inside the service (see `app/services/github.py`) — never let a raw `httpx` exception or status code reach a route
+- Translate HTTP status codes into domain exceptions inside the service — never let a raw `httpx` exception or status code reach a route. See `app/services/github_errors.py`'s `raise_for_github_response` for the pattern: one function that maps a response's status code to the right `AppError` subclass, called by every method that makes an API call, instead of each method hand-rolling its own status-code branching
 
 ## Anthropic SDK Standards
 - Always use `claude-sonnet-4-6` unless there's a specific reason not to
@@ -56,11 +60,32 @@ main.py              # App setup, lifespan, and exception handlers only
 - Log token usage on every call
 
 ## Error Handling
+
 - Never let raw exceptions bubble up to the client
-- Always return structured error responses
-- Log errors with context (what failed, what inputs caused it)
-- GitHub domain exceptions (`app/exceptions.py`) map to HTTP status via global handlers in `main.py`:
-  - `InvalidPRUrlError` → 400, `GitHubAuthError` → 401, `PRNotFoundError` → 404, `GitHubRateLimitError` → 429, `GitHubError` (fallback, e.g. network failure) → 502
+- Routes and services never catch exceptions and never log — they just raise. Logging and HTTP translation both happen in exactly one place: `main.py`'s `app_error_handler`
+- All domain exceptions subclass `AppError` (`app/exceptions.py`). FastAPI resolves exception handlers by walking the exception's MRO, so the single handler registered on `AppError` in `main.py` also catches every subclass (`GitHubError`, `PRNotFoundError`, `AIProviderError`, ...) automatically — **adding a new failure mode never requires a new handler function in `main.py`**, just a new exception class
+
+**To add a new domain exception:**
+1. Subclass `AppError` directly, or an existing domain subclass (`GitHubError`, `ReviewError`) if it belongs there
+2. Set `status_code` — required
+3. Optionally override `log_level`: `logging.WARNING` for expected, user-fixable states (bad input, expired token, not found — no traceback attached); leave the `logging.ERROR` default for anything that signals a bug or an outage (attaches a full traceback)
+4. Optionally override `user_message`: leave `None` to show the exception's own message to the client (safe for expected/actionable errors); set a fixed string to hide the real message instead (for unexpected/infra failures where the internal detail isn't useful, or safe, to expose)
+5. Raise it with `raise SomeError("message")` — no logging call needed. Pass `debug_context="..."` for extra diagnostic detail (e.g. a raw API response body) that should be logged but never sent to the client
+
+**Current exceptions**, as a reference:
+
+| Exception | Status | Log level | Client sees |
+|---|---|---|---|
+| `AIProviderError` | 502 | ERROR | fixed message |
+| `MalformedAIResponseError` | 500 | ERROR | fixed message |
+| `GitHubError` (fallback, e.g. network failure) | 502 | ERROR | fixed message |
+| `InvalidPRUrlError` | 400 | WARNING | own message |
+| `GitHubAuthError` | 401 | WARNING | own message |
+| `PRNotFoundError` | 404 | WARNING | own message |
+| `GitHubRateLimitError` | 429 | WARNING | own message |
+
+- `main.py` calls `logging.basicConfig(...)` once at import time — without it, `logging.getLogger(__name__)` calls anywhere in the app print bare, unformatted messages (no level, no timestamp, no logger name) via Python's fallback handler. Don't remove it, and don't add a second `basicConfig` call elsewhere
+- Services translate *what went wrong* into the right exception type; `main.py` alone handles *logging and responding*. If you're tempted to add a `logger.error(...)` call inside a service or route, that's a sign the failure needs a new/adjusted `AppError` subclass instead
 
 ## Cost Optimization
 - Cache system prompts with `cache_control: ephemeral`
@@ -88,7 +113,7 @@ conda run -n code-roaster python -m pytest tests/ -v
 tests/
 ├── conftest.py             # shared fixtures (mock_reviewer, mock_github_service, client)
 ├── mocks.py                # shared mock data
-├── test_routes.py          # /review, /review/stream, /review/structured, /health
+├── test_routes.py          # /review/stream, /review/structured, /health
 ├── test_auth.py            # /auth/github, /auth/github/callback
 ├── test_pr.py              # /review/pr
 └── test_github_service.py  # GitHubService unit tests (URL parsing, diff fetch, OAuth exchange)
@@ -99,7 +124,7 @@ tests/
 **Mocking the Anthropic client:**
 - Never instantiate a real `CodeReviewer` in tests — it requires `ANTHROPIC_API_KEY` and hits the API
 - `ASGITransport` does NOT trigger the FastAPI lifespan, so set `app.state.reviewer` directly in the fixture
-- Use `MagicMock(spec=CodeReviewer)` as the base; set `review` and `review_structured` as `AsyncMock`; set `review_stream` as `MagicMock(side_effect=async_gen_fn)` since it returns an async generator (not a coroutine)
+- Use `MagicMock(spec=CodeReviewer)` as the base; set `review_structured` as `AsyncMock`; set `review_stream` as `MagicMock(side_effect=async_gen_fn)` since it returns an async generator (not a coroutine)
 
 **Mocking GitHub calls:**
 - Never hit the real GitHub API in tests

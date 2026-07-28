@@ -1,5 +1,5 @@
-from app.reviewer import StructuredReview
-from app.services.github import PullRequestRef
+from app.models.pr import PullRequestRef
+from app.models.review import StructuredReview
 
 SAMPLE_CODE = "def add(a: int, b: int) -> int:\n    return a + b"
 

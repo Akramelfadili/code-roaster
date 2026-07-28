@@ -6,16 +6,16 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
-from app.reviewer import CodeReviewer
 from app.services.github import GitHubService
+from app.services.reviewer import CodeReviewer
 from app.tests.mocks import SAMPLE_PR_DIFF, SAMPLE_PR_REF, SAMPLE_STRUCTURED_REVIEW
 
 
 @pytest.fixture
 def mock_reviewer() -> MagicMock:
     reviewer = MagicMock(spec=CodeReviewer)
-    reviewer.review = AsyncMock(return_value="Looks good. No major issues found.")
     reviewer.review_structured = AsyncMock(return_value=SAMPLE_STRUCTURED_REVIEW)
+    reviewer.review_pr_diff = AsyncMock(return_value=SAMPLE_STRUCTURED_REVIEW)
 
     async def default_stream(code: str, language: str = "python") -> AsyncIterator[str]:
         yield "Streaming "

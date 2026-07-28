@@ -1,4 +1,14 @@
+from typing import NamedTuple
+
 from pydantic import BaseModel, field_validator
+
+
+class PullRequestRef(NamedTuple):
+    """Identifies a specific pull request on GitHub."""
+
+    owner: str
+    repo: str
+    number: int
 
 
 class PRReviewRequest(BaseModel):

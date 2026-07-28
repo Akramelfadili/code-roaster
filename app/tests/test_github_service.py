@@ -7,7 +7,8 @@ from app.exceptions import (
     InvalidPRUrlError,
     PRNotFoundError,
 )
-from app.services.github import GitHubService, PullRequestRef
+from app.models.pr import PullRequestRef
+from app.services.github import GitHubService
 from app.tests.mocks import SAMPLE_PR_REF, SAMPLE_PR_URL
 
 

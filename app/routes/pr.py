@@ -1,13 +1,8 @@
 from fastapi import APIRouter, Request
 
 from app.models import PRReviewRequest, StructuredReviewResponse
-from app.services.github import PullRequestRef
 
 router = APIRouter(prefix="/review", tags=["review"])
-
-
-def _build_pr_review_context(pr: PullRequestRef, diff: str) -> str:
-    return f"Pull request {pr.owner}/{pr.repo}#{pr.number}:\n\n```diff\n{diff}\n```"
 
 
 @router.post("/pr", response_model=StructuredReviewResponse)
@@ -16,11 +11,9 @@ async def review_pr(request: PRReviewRequest, req: Request) -> StructuredReviewR
     github_service = req.app.state.github_service
     pr = github_service.parse_pr_url(request.pr_url)
     diff = await github_service.fetch_pr_diff(pr, request.github_token)
-    code_context = _build_pr_review_context(pr, diff)
+    pr_label = f"{pr.owner}/{pr.repo}#{pr.number}"
 
-    result = await req.app.state.reviewer.review_structured(
-        code=code_context, language="diff"
-    )
+    result = await req.app.state.reviewer.review_pr_diff(pr_label, diff)
     return StructuredReviewResponse(
         detected_language=result.detected_language,
         summary=result.summary,
