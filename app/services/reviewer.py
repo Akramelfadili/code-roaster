@@ -1,3 +1,4 @@
+import logging
 import os
 from collections.abc import AsyncIterator
 from typing import cast
@@ -13,6 +14,8 @@ from app.prompts.review import (
     STRUCTURED_REVIEW_TOOL,
     ReviewToolOutput,
 )
+
+logger = logging.getLogger(__name__)
 
 _AUTO_LANGUAGE = "auto"
 # STRUCTURED_REVIEW_TOOL marks bugs/security_issues/suggestions/positives as
@@ -71,6 +74,11 @@ class CodeReviewer:
         except APIError as e:
             raise AIProviderError("Anthropic API call failed") from e
 
+        logger.info(
+            f"Token usage — type=structured input={response.usage.input_tokens} "
+            f"output={response.usage.output_tokens}"
+        )
+
         tool_use_block = next(
             (b for b in response.content if b.type == "tool_use"), None
         )
@@ -116,3 +124,8 @@ class CodeReviewer:
         ) as stream:
             async for text in stream.text_stream:
                 yield text
+            final_message = await stream.get_final_message()
+            logger.info(
+                f"Token usage — type=stream input={final_message.usage.input_tokens} "
+                f"output={final_message.usage.output_tokens}"
+            )
