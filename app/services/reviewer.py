@@ -6,7 +6,11 @@ import anthropic
 from anthropic import APIError
 
 from app.config import settings
-from app.exceptions import AIProviderError, MalformedAIResponseError
+from app.exceptions import (
+    AIProviderError,
+    AIProviderRateLimitError,
+    MalformedAIResponseError,
+)
 from app.models.review import StructuredReview
 from app.prompts.review import (
     SECURITY_REVIEW_SYSTEM_PROMPT,
@@ -71,6 +75,8 @@ class CodeReviewer:
                     }
                 ],
             )
+        except anthropic.RateLimitError as e:
+            raise AIProviderRateLimitError("Anthropic API rate limit exceeded") from e
         except APIError as e:
             raise AIProviderError("Anthropic API call failed") from e
 
@@ -105,27 +111,38 @@ class CodeReviewer:
     async def review_stream(
         self, code: str, language: str = "python"
     ) -> AsyncIterator[str]:
-        async with self.client.messages.stream(
-            model=self.model,
-            max_tokens=2048,
-            system=[
-                {
-                    "type": "text",
-                    "text": SECURITY_REVIEW_SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[
-                {
-                    "role": "user",
-                    "content": self._build_review_message(code, language),
-                }
-            ],
-        ) as stream:
-            async for text in stream.text_stream:
-                yield text
-            final_message = await stream.get_final_message()
-            logger.info(
-                f"Token usage — type=stream input={final_message.usage.input_tokens} "
-                f"output={final_message.usage.output_tokens}"
-            )
+        try:
+            async with self.client.messages.stream(
+                model=self.model,
+                max_tokens=2048,
+                system=[
+                    {
+                        "type": "text",
+                        "text": SECURITY_REVIEW_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": self._build_review_message(code, language),
+                    }
+                ],
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield text
+                final_message = await stream.get_final_message()
+                usage = final_message.usage
+                logger.info(
+                    f"Token usage — type=stream input={usage.input_tokens} "
+                    f"output={usage.output_tokens}"
+                )
+        except anthropic.RateLimitError as e:
+            # The client's exception handler can't cleanly turn this into a JSON
+            # error response once streaming has started sending bytes, so log
+            # here with full context rather than relying on main.py to do it.
+            logger.warning(f"Anthropic API rate limit exceeded mid-stream: {e}")
+            raise AIProviderRateLimitError("Anthropic API rate limit exceeded") from e
+        except APIError as e:
+            logger.error(f"Anthropic API call failed mid-stream: {e}", exc_info=e)
+            raise AIProviderError("Anthropic API call failed") from e

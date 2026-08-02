@@ -43,6 +43,12 @@ class AIProviderError(ReviewError):
     user_message: str | None = "AI provider unavailable"
 
 
+class AIProviderRateLimitError(AIProviderError):
+    status_code = 429
+    log_level = logging.WARNING
+    user_message: str | None = None
+
+
 class MalformedAIResponseError(ReviewError):
     status_code = 500
     user_message: str | None = "Unexpected response from AI"
