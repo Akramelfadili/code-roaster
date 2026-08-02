@@ -21,13 +21,4 @@ async def review_code_structured(
     result = await req.app.state.reviewer.review_structured(
         code=request.code, language=request.language
     )
-    return StructuredReviewResponse(
-        detected_language=result.detected_language,
-        summary=result.summary,
-        severity=result.severity,
-        score=result.score,
-        bugs=result.bugs,
-        security_issues=result.security_issues,
-        suggestions=result.suggestions,
-        positives=result.positives,
-    )
+    return StructuredReviewResponse.from_domain(result)

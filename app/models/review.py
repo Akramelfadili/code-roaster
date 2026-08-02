@@ -1,3 +1,5 @@
+from typing import Self
+
 from pydantic import BaseModel, Field, field_validator
 
 from app.constants import Severity
@@ -24,6 +26,19 @@ class StructuredReviewResponse(BaseModel):
     security_issues: list[str]
     suggestions: list[str]
     positives: list[str]
+
+    @classmethod
+    def from_domain(cls, review: "StructuredReview") -> Self:
+        return cls(
+            detected_language=review.detected_language,
+            summary=review.summary,
+            severity=review.severity,
+            score=review.score,
+            bugs=review.bugs,
+            security_issues=review.security_issues,
+            suggestions=review.suggestions,
+            positives=review.positives,
+        )
 
 
 class StructuredReview:

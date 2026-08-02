@@ -14,13 +14,4 @@ async def review_pr(request: PRReviewRequest, req: Request) -> StructuredReviewR
     pr_label = f"{pr.owner}/{pr.repo}#{pr.number}"
 
     result = await req.app.state.reviewer.review_pr_diff(pr_label, diff)
-    return StructuredReviewResponse(
-        detected_language=result.detected_language,
-        summary=result.summary,
-        severity=result.severity,
-        score=result.score,
-        bugs=result.bugs,
-        security_issues=result.security_issues,
-        suggestions=result.suggestions,
-        positives=result.positives,
-    )
+    return StructuredReviewResponse.from_domain(result)
