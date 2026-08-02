@@ -25,6 +25,7 @@ repos:
           - anthropic
           - fastapi
           - pydantic>=2.0
+          - pydantic-settings>=2.0
           - python-dotenv
           - pytest
           - pytest-asyncio

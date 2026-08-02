@@ -1,12 +1,12 @@
-import os
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 
+from app.config import settings
+
 GITHUB_OAUTH_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 GITHUB_OAUTH_SCOPE = "repo"
-DEFAULT_FRONTEND_URL = "http://localhost:5173"
 FRONTEND_CALLBACK_PATH = "/auth/callback"
 FRONTEND_TOKEN_PARAM = "token"  # noqa: S105 # nosec B105
 
@@ -25,6 +25,6 @@ async def github_login(req: Request) -> RedirectResponse:
 async def github_callback(code: str, req: Request) -> RedirectResponse:
     """Exchange the OAuth code for an access token and redirect to the frontend."""
     access_token = await req.app.state.github_service.exchange_code_for_token(code)
-    frontend_url = os.environ.get("FRONTEND_URL", DEFAULT_FRONTEND_URL)
+    frontend_url = settings.frontend_url
     query = urlencode({FRONTEND_TOKEN_PARAM: access_token})
     return RedirectResponse(f"{frontend_url}{FRONTEND_CALLBACK_PATH}?{query}")

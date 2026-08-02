@@ -1,11 +1,11 @@
 import logging
-import os
 from collections.abc import AsyncIterator
 from typing import cast
 
 import anthropic
 from anthropic import APIError
 
+from app.config import settings
 from app.exceptions import AIProviderError, MalformedAIResponseError
 from app.models.review import StructuredReview
 from app.prompts.review import (
@@ -37,7 +37,7 @@ def _require_review_fields(data: ReviewToolOutput) -> None:
 
 class CodeReviewer:
     def __init__(self) -> None:
-        self.client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         self.model = "claude-sonnet-4-6"
 
     def _build_review_message(self, code: str, language: str) -> str:

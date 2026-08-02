@@ -1,5 +1,4 @@
 import logging
-import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -7,6 +6,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from app.config import settings
 from app.exceptions import AppError
 from app.routes.auth import router as auth_router
 from app.routes.health import router as health_router
@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.reviewer = CodeReviewer()
     app.state.github_service = GitHubService(
-        client_id=os.environ["GITHUB_CLIENT_ID"],
-        client_secret=os.environ["GITHUB_CLIENT_SECRET"],
+        client_id=settings.github_client_id,
+        client_secret=settings.github_client_secret,
     )
     yield
 
