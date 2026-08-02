@@ -7,7 +7,7 @@ Python 3.12, FastAPI, Anthropic SDK, Pydantic v2, conda environment
 ```
 app/
 ├── __init__.py
-├── constants.py        # Cross-cutting shared values (e.g. Severity) — single source of truth for anything used by more than one of models/reviewer/prompts
+├── constants.py        # All magic strings/numbers used anywhere in app/ (e.g. Severity, ANTHROPIC_MODEL, ANTHROPIC_MAX_TOKENS) — single source of truth, not just for values shared across multiple files
 ├── exceptions.py       # AppError base + all domain exceptions — see "Error Handling"
 ├── models/
 │   ├── review.py        # Review request/response models
@@ -30,6 +30,7 @@ main.py              # App setup, lifespan, logging config, and the single AppEr
 - Never use relative imports with `..`
 
 ## Python Standards
+- No magic strings or numbers — define them as named constants in `app/constants.py`
 - Type hints on every function — always
 - Docstrings on every class and public method
 - No `Any` type — ever
@@ -52,7 +53,7 @@ main.py              # App setup, lifespan, logging config, and the single AppEr
 - Translate HTTP status codes into domain exceptions inside the service — never let a raw `httpx` exception or status code reach a route. See `app/services/github_errors.py`'s `raise_for_github_response` for the pattern: one function that maps a response's status code to the right `AppError` subclass, called by every method that makes an API call, instead of each method hand-rolling its own status-code branching
 
 ## Anthropic SDK Standards
-- Always use `claude-sonnet-4-6` unless there's a specific reason not to
+- Always use `ANTHROPIC_MODEL` from `app/constants.py` (currently `claude-sonnet-4-6`) unless there's a specific reason not to
 - Always include `cache_control: ephemeral` on system prompts
 - Use `AsyncAnthropic` — never the sync client
 - Streaming for text responses, `create()` for structured output

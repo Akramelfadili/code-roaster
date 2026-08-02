@@ -6,6 +6,7 @@ import anthropic
 from anthropic import APIError
 
 from app.config import settings
+from app.constants import ANTHROPIC_MAX_TOKENS, ANTHROPIC_MODEL
 from app.exceptions import (
     AIProviderError,
     AIProviderRateLimitError,
@@ -42,7 +43,7 @@ def _require_review_fields(data: ReviewToolOutput) -> None:
 class CodeReviewer:
     def __init__(self) -> None:
         self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        self.model = "claude-sonnet-4-6"
+        self.model = ANTHROPIC_MODEL
 
     def _build_review_message(self, code: str, language: str) -> str:
         if language == _AUTO_LANGUAGE:
@@ -58,7 +59,7 @@ class CodeReviewer:
         try:
             response = await self.client.messages.create(
                 model=self.model,
-                max_tokens=2048,
+                max_tokens=ANTHROPIC_MAX_TOKENS,
                 system=[
                     {
                         "type": "text",
@@ -114,7 +115,7 @@ class CodeReviewer:
         try:
             async with self.client.messages.stream(
                 model=self.model,
-                max_tokens=2048,
+                max_tokens=ANTHROPIC_MAX_TOKENS,
                 system=[
                     {
                         "type": "text",
