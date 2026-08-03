@@ -1,9 +1,9 @@
 import { API_REVIEW_ENDPOINT, API_STREAM_ENDPOINT } from '@/constants/api';
-import type { ReviewRequest, ReviewResult } from '@/types/review';
+import type { ReviewData, ReviewRequest } from '@/types/review';
 import { httpClient } from '@/utils/httpClient';
 import { parseReviewResult } from '@/utils/review';
 
-export async function fetchReview(request: ReviewRequest): Promise<ReviewResult> {
+export async function fetchReview(request: ReviewRequest): Promise<ReviewData> {
   const response = await httpClient.post<unknown>(API_REVIEW_ENDPOINT, {
     code: request.code,
     language: request.language.toLowerCase(),

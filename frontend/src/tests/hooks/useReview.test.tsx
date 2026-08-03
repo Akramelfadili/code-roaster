@@ -7,13 +7,13 @@ import { fetchReview, streamReview } from '@/api/review';
 import { useReview } from '@/hooks/useReview';
 import { AppError, AppErrorCode } from '@/types/errors';
 import { Language, Severity } from '@/types/review';
-import type { ReviewResult } from '@/types/review';
+import type { ReviewData } from '@/types/review';
 
 vi.mock('@/api/review');
 
 const mockRequest = { code: 'const x = 1', language: Language.JavaScript };
 
-const mockResult: ReviewResult = {
+const mockResult: ReviewData = {
   summary: 'Looks good',
   severity: Severity.Low,
   score: 8,

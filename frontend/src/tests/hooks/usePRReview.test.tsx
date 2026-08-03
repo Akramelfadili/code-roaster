@@ -7,7 +7,7 @@ import { fetchPRReview } from '@/api/pr';
 import { usePRReview } from '@/hooks/usePRReview';
 import { AppError, AppErrorCode } from '@/types/errors';
 import { Severity } from '@/types/review';
-import type { ReviewResult } from '@/types/review';
+import type { ReviewData } from '@/types/review';
 
 vi.mock('@/api/pr');
 
@@ -16,7 +16,7 @@ const mockRequest = {
   githubToken: 'gh-token',
 };
 
-const mockResult: ReviewResult = {
+const mockResult: ReviewData = {
   summary: 'Looks good',
   severity: Severity.Low,
   score: 8,

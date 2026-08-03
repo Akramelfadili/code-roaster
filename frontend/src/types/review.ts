@@ -39,7 +39,7 @@ export const ReviewResultSchema = z.object({
   positives: z.array(z.string()).default([]),
 });
 
-export type ReviewResult = z.infer<typeof ReviewResultSchema>;
+export type ReviewData = z.infer<typeof ReviewResultSchema>;
 
 export interface UseReviewReturn {
   submitReview: (request: ReviewRequest) => Promise<void>;
@@ -47,7 +47,7 @@ export interface UseReviewReturn {
   isStreaming: boolean;
   isLoadingStructured: boolean;
   reviewError: AppError | null;
-  reviewResult: ReviewResult | null;
+  reviewResult: ReviewData | null;
 }
 
 export const ReviewMode = {
@@ -66,5 +66,5 @@ export interface UsePRReviewReturn {
   submitPRReview: (request: PRReviewRequest) => Promise<void>;
   isLoadingPRReview: boolean;
   prReviewError: AppError | null;
-  prReviewResult: ReviewResult | null;
+  prReviewResult: ReviewData | null;
 }

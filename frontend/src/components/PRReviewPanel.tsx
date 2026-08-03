@@ -4,7 +4,7 @@ import { ErrorMessage } from '@/components/ErrorMessage';
 import { PRInput } from '@/components/PRInput';
 import { ReviewResult } from '@/components/ReviewResult';
 import type { AppError } from '@/types/errors';
-import type { ReviewResult as ReviewResultType } from '@/types/review';
+import type { ReviewData } from '@/types/review';
 
 interface PRReviewPanelProps {
   isAuthenticated: boolean;
@@ -13,11 +13,19 @@ interface PRReviewPanelProps {
   isLoadingReview: boolean;
   onSubmit: () => void;
   reviewError: AppError | null;
-  reviewResult: ReviewResultType | null;
+  reviewResult: ReviewData | null;
 }
 
-export function PRReviewPanel(props: PRReviewPanelProps): JSX.Element {
-  if (!props.isAuthenticated) {
+export function PRReviewPanel({
+  isAuthenticated,
+  prUrl,
+  onPrUrlChange,
+  isLoadingReview,
+  onSubmit,
+  reviewError,
+  reviewResult,
+}: PRReviewPanelProps): JSX.Element {
+  if (!isAuthenticated) {
     return (
       <p className="text-sm text-gray-500">
         Log in with GitHub in the header to review a pull request.
@@ -28,16 +36,14 @@ export function PRReviewPanel(props: PRReviewPanelProps): JSX.Element {
   return (
     <div className="space-y-5">
       <PRInput
-        prUrl={props.prUrl}
-        isLoadingReview={props.isLoadingReview}
-        onPrUrlChange={props.onPrUrlChange}
-        onSubmit={props.onSubmit}
+        prUrl={prUrl}
+        isLoadingReview={isLoadingReview}
+        onPrUrlChange={onPrUrlChange}
+        onSubmit={onSubmit}
       />
-      {props.reviewError && (
-        <ErrorMessage error={props.reviewError} onRetry={props.onSubmit} />
-      )}
-      {props.reviewResult !== null && !props.isLoadingReview && (
-        <ReviewResult result={props.reviewResult} />
+      {reviewError && <ErrorMessage error={reviewError} onRetry={onSubmit} />}
+      {reviewResult !== null && !isLoadingReview && (
+        <ReviewResult result={reviewResult} />
       )}
     </div>
   );

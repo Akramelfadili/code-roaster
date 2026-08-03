@@ -3,9 +3,9 @@ import { describe, it, expect } from 'vitest';
 
 import { ReviewResult } from '@/components/ReviewResult';
 import { Severity } from '@/types/review';
-import type { ReviewResult as ReviewResultType } from '@/types/review';
+import type { ReviewData } from '@/types/review';
 
-const baseResult: ReviewResultType = {
+const baseResult: ReviewData = {
   summary: 'Code has a few issues to address.',
   severity: Severity.High,
   score: 4,

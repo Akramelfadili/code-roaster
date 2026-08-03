@@ -2,7 +2,7 @@ import { useMutation } from '@tanstack/react-query';
 
 import { fetchPRReview } from '@/api/pr';
 import type { AppError } from '@/types/errors';
-import type { PRReviewRequest, ReviewResult, UsePRReviewReturn } from '@/types/review';
+import type { PRReviewRequest, ReviewData, UsePRReviewReturn } from '@/types/review';
 
 export function usePRReview(): UsePRReviewReturn {
   const {
@@ -10,7 +10,7 @@ export function usePRReview(): UsePRReviewReturn {
     isPending: isLoadingPRReview,
     error: prReviewError,
     data: prReviewResult,
-  } = useMutation<ReviewResult, AppError, PRReviewRequest>({
+  } = useMutation<ReviewData, AppError, PRReviewRequest>({
     mutationFn: fetchPRReview,
     retry: 0,
   });

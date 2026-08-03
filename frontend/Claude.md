@@ -55,6 +55,16 @@ src/
 
 ## React Standards
 - Functional components only — no class components. Error boundaries are the one case React can't do without a class (`componentDidCatch`/`getDerivedStateFromError` have no hook equivalent) — use the `react-error-boundary` package, which wraps that class internally and exposes a functional `<ErrorBoundary>` API. Never hand-write a class component for this.
+- Always destructure props in the function signature — never reference `props.x` in the body:
+  ```typescript
+  // Good
+  export function Foo({ bar, baz }: FooProps): JSX.Element { ... }
+
+  // Bad
+  export function Foo(props: FooProps): JSX.Element {
+    return <div>{props.bar}</div>
+  }
+  ```
 - Return statement is always last in a component
 - Loading and error checks happen BEFORE the return statement
 - No API calls inside components — use hooks

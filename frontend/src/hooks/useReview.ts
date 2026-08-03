@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 
 import { fetchReview, streamReview } from '@/api/review';
 import type { AppError } from '@/types/errors';
-import type { ReviewRequest, ReviewResult, UseReviewReturn } from '@/types/review';
+import type { ReviewData, ReviewRequest, UseReviewReturn } from '@/types/review';
 
 export function useReview(): UseReviewReturn {
   const [streamingText, setStreamingText] = useState('');
@@ -17,7 +17,7 @@ export function useReview(): UseReviewReturn {
     error: structuredError,
     data: reviewResult,
     reset: resetStructured,
-  } = useMutation<ReviewResult, AppError, ReviewRequest>({
+  } = useMutation<ReviewData, AppError, ReviewRequest>({
     mutationFn: fetchReview,
     retry: 0,
   });

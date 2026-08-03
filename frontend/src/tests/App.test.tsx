@@ -9,7 +9,7 @@ import { usePRReview } from '@/hooks/usePRReview';
 import { useReview } from '@/hooks/useReview';
 import { AppError, AppErrorCode } from '@/types/errors';
 import { Severity } from '@/types/review';
-import type { ReviewResult } from '@/types/review';
+import type { ReviewData } from '@/types/review';
 
 vi.mock('@/hooks/useReview');
 vi.mock('@/hooks/usePRReview');
@@ -49,7 +49,7 @@ const idleGitHubUserState = {
   isLoadingGitHubUser: false,
 };
 
-const mockResult: ReviewResult = {
+const mockResult: ReviewData = {
   summary: 'Solid code overall.',
   severity: Severity.Low,
   score: 9,

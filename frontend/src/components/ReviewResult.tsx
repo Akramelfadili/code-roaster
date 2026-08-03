@@ -3,10 +3,10 @@ import type { JSX } from 'react/jsx-runtime';
 import { ScoreDisplay } from '@/components/ScoreDisplay';
 import { Section } from '@/components/Section';
 import { SeverityBadge } from '@/components/SeverityBadge';
-import type { ReviewResult as ReviewResultType } from '@/types/review';
+import type { ReviewData } from '@/types/review';
 
 interface ReviewResultProps {
-  result: ReviewResultType;
+  result: ReviewData;
 }
 
 export function ReviewResult({ result }: ReviewResultProps): JSX.Element {
