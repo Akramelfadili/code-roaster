@@ -33,6 +33,18 @@ src/
 - Never call `fetch` directly in API functions — use `httpClient.post<T>(endpoint, body)`
 - Error handling and JSON parsing live in `httpClient` only — never inline them
 
+## Runtime Validation
+- All API responses must be validated with a Zod schema at the API boundary — never trust `response.json() as T` past that point
+- Zod schemas live in `src/types/` next to the feature they describe (e.g. `ReviewResultSchema` in `src/types/review.ts`)
+- TypeScript types for API response shapes must be inferred from their Zod schema with `z.infer<typeof Schema>` — never hand-written as a separate `interface`/`type`
+- Use `.default([])` on array fields so a missing field fails safe instead of crashing components that `.map()` over it
+- Hooks and components never see unvalidated data — the parsing call happens before data leaves `src/api/`
+
+## `types/` vs `utils/`
+- `src/types/` holds shape only: interfaces, enums, Zod schemas, and types inferred from them (`z.infer<...>`). Nothing in `types/` should execute logic or throw.
+- Any function that runs validation, transforms data, or converts one error type into another (e.g. a Zod `safeParse` result into an `AppError`) is behavior, not shape — it belongs in `src/utils/`, named after the feature (e.g. `parseReviewResult` in `src/utils/review.ts`), and imports the schema/types it needs from `src/types/`
+- Rule of thumb: if removing `export function` would make it a `.d.ts`-shaped file, it belongs in `types/`; if it has a body that does work, it belongs in `utils/`
+
 ## TypeScript Standards
 - Strict mode always on
 - No `any` — ever. Use `unknown` and narrow it

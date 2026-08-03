@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import type { AppError } from '@/types/errors';
 
 export const Severity = {
@@ -26,16 +28,18 @@ export interface ReviewRequest {
   language: Language;
 }
 
-export interface ReviewResult {
-  detected_language?: string;
-  summary: string;
-  severity: Severity;
-  score: number;
-  bugs: string[];
-  security_issues: string[];
-  suggestions: string[];
-  positives: string[];
-}
+export const ReviewResultSchema = z.object({
+  detected_language: z.string().optional(),
+  summary: z.string(),
+  severity: z.enum(Severity),
+  score: z.number(),
+  bugs: z.array(z.string()).default([]),
+  security_issues: z.array(z.string()).default([]),
+  suggestions: z.array(z.string()).default([]),
+  positives: z.array(z.string()).default([]),
+});
+
+export type ReviewResult = z.infer<typeof ReviewResultSchema>;
 
 export interface UseReviewReturn {
   submitReview: (request: ReviewRequest) => Promise<void>;
