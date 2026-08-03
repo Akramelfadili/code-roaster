@@ -18,6 +18,7 @@ export function PRInput({
       <input
         type="url"
         className="w-full bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 text-sm font-mono text-gray-100 placeholder-gray-700 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+        aria-label="Pull request URL"
         placeholder="https://github.com/owner/repo/pull/123"
         value={prUrl}
         onChange={(e) => onPrUrlChange(e.target.value)}

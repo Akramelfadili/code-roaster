@@ -41,8 +41,10 @@ def _require_review_fields(data: ReviewToolOutput) -> None:
 
 
 class CodeReviewer:
-    def __init__(self) -> None:
-        self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    def __init__(self, client: anthropic.AsyncAnthropic | None = None) -> None:
+        self.client = client or anthropic.AsyncAnthropic(
+            api_key=settings.anthropic_api_key
+        )
         self.model = ANTHROPIC_MODEL
 
     def _build_review_message(self, code: str, language: str) -> str:

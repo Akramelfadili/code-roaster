@@ -24,6 +24,7 @@ export function CodeInput({
     <div className="space-y-3">
       <textarea
         className="w-full h-60 bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 text-sm font-mono text-gray-100 placeholder-gray-700 resize-none focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+        aria-label="Code to review"
         placeholder="Paste your code here..."
         value={code}
         onChange={(e) => onCodeChange(e.target.value)}
@@ -32,6 +33,7 @@ export function CodeInput({
       <div className="flex gap-3">
         <select
           className="bg-gray-900 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-300 focus:outline-none focus:border-blue-400 cursor-pointer"
+          aria-label="Programming language"
           value={language}
           onChange={(e) => onLanguageChange(e.target.value as Language)}
         >

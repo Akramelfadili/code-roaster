@@ -21,6 +21,7 @@ export function ReviewModeTabs({
       {REVIEW_MODES.map((reviewMode) => (
         <button
           key={reviewMode}
+          id={`review-tab-${reviewMode}`}
           role="tab"
           aria-selected={mode === reviewMode}
           className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${

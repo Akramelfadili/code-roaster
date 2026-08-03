@@ -55,39 +55,53 @@ export default function App(): JSX.Element {
       <main className="max-w-3xl mx-auto px-6 py-8 space-y-5">
         <ReviewModeTabs mode={reviewMode} onModeChange={setReviewMode} />
         {reviewMode === ReviewMode.Code ? (
-          <ErrorBoundary>
-            <CodeInput
-              code={code}
-              language={language}
-              isLoadingReview={isReviewInProgress}
-              onCodeChange={setCode}
-              onLanguageChange={setLanguage}
-              onSubmit={handleSubmit}
-            />
-            {reviewError && <ErrorMessage error={reviewError} onRetry={handleSubmit} />}
-            {showStreamingText && (
-              <StreamingText
-                text={streamingText}
-                isStreaming={isStreaming}
-                isLoadingStructured={isLoadingStructured}
+          <div
+            role="tabpanel"
+            id="review-panel-code"
+            aria-labelledby={`review-tab-${ReviewMode.Code}`}
+          >
+            <ErrorBoundary>
+              <CodeInput
+                code={code}
+                language={language}
+                isLoadingReview={isReviewInProgress}
+                onCodeChange={setCode}
+                onLanguageChange={setLanguage}
+                onSubmit={handleSubmit}
               />
-            )}
-            {reviewResult !== null && !isReviewInProgress && (
-              <ReviewResult result={reviewResult} />
-            )}
-          </ErrorBoundary>
+              {reviewError && (
+                <ErrorMessage error={reviewError} onRetry={handleSubmit} />
+              )}
+              {showStreamingText && (
+                <StreamingText
+                  text={streamingText}
+                  isStreaming={isStreaming}
+                  isLoadingStructured={isLoadingStructured}
+                />
+              )}
+              {reviewResult !== null && !isReviewInProgress && (
+                <ReviewResult result={reviewResult} />
+              )}
+            </ErrorBoundary>
+          </div>
         ) : (
-          <ErrorBoundary>
-            <PRReviewPanel
-              isAuthenticated={isAuthenticated}
-              prUrl={prUrl}
-              onPrUrlChange={setPrUrl}
-              isLoadingReview={isLoadingPRReview}
-              onSubmit={handlePrSubmit}
-              reviewError={prReviewError}
-              reviewResult={prReviewResult}
-            />
-          </ErrorBoundary>
+          <div
+            role="tabpanel"
+            id="review-panel-pr"
+            aria-labelledby={`review-tab-${ReviewMode.PR}`}
+          >
+            <ErrorBoundary>
+              <PRReviewPanel
+                isAuthenticated={isAuthenticated}
+                prUrl={prUrl}
+                onPrUrlChange={setPrUrl}
+                isLoadingReview={isLoadingPRReview}
+                onSubmit={handlePrSubmit}
+                reviewError={prReviewError}
+                reviewResult={prReviewResult}
+              />
+            </ErrorBoundary>
+          </div>
         )}
       </main>
     </div>
