@@ -7,11 +7,14 @@ Python 3.12, FastAPI, Anthropic SDK, Pydantic v2, conda environment
 ```
 app/
 ├── __init__.py
+├── config.py            # Settings — all env-loaded config, see "Configuration"
 ├── constants.py        # All magic strings/numbers used anywhere in app/ (e.g. Severity, ANTHROPIC_MODEL, ANTHROPIC_MAX_TOKENS) — single source of truth, not just for values shared across multiple files
 ├── exceptions.py       # AppError base + all domain exceptions — see "Error Handling"
 ├── models/
 │   ├── review.py        # Review request/response models
 │   └── pr.py             # PullRequestRef, PR review request models
+├── prompts/
+│   └── review.py         # System prompts + STRUCTURED_REVIEW_TOOL schema for CodeReviewer
 ├── services/
 │   ├── reviewer.py        # CodeReviewer class — all AI logic lives here
 │   ├── github.py          # GitHubService — OAuth token exchange, PR URL parsing, diff fetch
@@ -22,7 +25,7 @@ app/
     ├── auth.py         # /auth/github, /auth/github/callback — GitHub OAuth
     ├── pr.py           # /review/pr — PR diff review
     └── health.py       # /health
-main.py              # App setup, lifespan, logging config, and the single AppError handler
+main.py              # App setup, lifespan, logging config, and the exception handlers
 ```
 
 ## Imports
@@ -40,10 +43,15 @@ main.py              # App setup, lifespan, logging config, and the single AppEr
 
 ## FastAPI Standards
 - Pydantic models for all request/response bodies — never raw dicts
+- Input validation lives in Pydantic models (`field_validator`), not routes
 - HTTPException with clear status codes and messages
 - Lifespan for startup/shutdown (not deprecated @app.on_event)
 - Router prefix and tags on all routers
 - One router per domain (review, auth, etc.)
+
+## Configuration
+- All configuration comes from `Settings` (`app/config.py`), loaded once from env vars / `.env` — never call `os.environ`/`os.getenv` directly anywhere else in `app/`
+- New config values (API keys, client secrets, feature toggles) get added as typed fields on `Settings`, not read ad hoc where they're used
 
 ## External API Calls
 - Any class that talks to an external API or SDK — the GitHub REST API, the Anthropic SDK, anything added later — lives under `app/services/`. No exceptions for how central it is to the product (`CodeReviewer` included): one flat rule beats a "core vs. adapter" distinction that only makes sense in hindsight
@@ -63,8 +71,9 @@ main.py              # App setup, lifespan, logging config, and the single AppEr
 ## Error Handling
 
 - Never let raw exceptions bubble up to the client
-- Routes and services never catch exceptions and never log — they just raise. Logging and HTTP translation both happen in exactly one place: `main.py`'s `app_error_handler`
+- Routes and services never catch exceptions and never log — they just raise. Logging and HTTP translation both happen in exactly one place: `main.py`'s exception handlers
 - All domain exceptions subclass `AppError` (`app/exceptions.py`). FastAPI resolves exception handlers by walking the exception's MRO, so the single handler registered on `AppError` in `main.py` also catches every subclass (`GitHubError`, `PRNotFoundError`, `AIProviderError`, ...) automatically — **adding a new failure mode never requires a new handler function in `main.py`**, just a new exception class
+- Anything that isn't an `AppError` subclass (an unmodeled bug) is caught by a second handler, `unhandled_exception_handler` in `main.py` — it always logs at ERROR with a full traceback and always returns a generic 500, never the real exception message, since it wasn't written with a client in mind
 
 **To add a new domain exception:**
 1. Subclass `AppError` directly, or an existing domain subclass (`GitHubError`, `ReviewError`) if it belongs there
@@ -73,20 +82,9 @@ main.py              # App setup, lifespan, logging config, and the single AppEr
 4. Optionally override `user_message`: leave `None` to show the exception's own message to the client (safe for expected/actionable errors); set a fixed string to hide the real message instead (for unexpected/infra failures where the internal detail isn't useful, or safe, to expose)
 5. Raise it with `raise SomeError("message")` — no logging call needed. Pass `debug_context="..."` for extra diagnostic detail (e.g. a raw API response body) that should be logged but never sent to the client
 
-**Current exceptions**, as a reference:
-
-| Exception | Status | Log level | Client sees |
-|---|---|---|---|
-| `AIProviderError` | 502 | ERROR | fixed message |
-| `MalformedAIResponseError` | 500 | ERROR | fixed message |
-| `GitHubError` (fallback, e.g. network failure) | 502 | ERROR | fixed message |
-| `InvalidPRUrlError` | 400 | WARNING | own message |
-| `GitHubAuthError` | 401 | WARNING | own message |
-| `PRNotFoundError` | 404 | WARNING | own message |
-| `GitHubRateLimitError` | 429 | WARNING | own message |
-
 - `main.py` calls `logging.basicConfig(...)` once at import time — without it, `logging.getLogger(__name__)` calls anywhere in the app print bare, unformatted messages (no level, no timestamp, no logger name) via Python's fallback handler. Don't remove it, and don't add a second `basicConfig` call elsewhere
 - Services translate *what went wrong* into the right exception type; `main.py` alone handles *logging and responding*. If you're tempted to add a `logger.error(...)` call inside a service or route, that's a sign the failure needs a new/adjusted `AppError` subclass instead
+- **Exception:** streaming endpoints (`CodeReviewer.review_stream`) log directly in the service before re-raising. Once response bytes have started flowing, `main.py`'s handler can no longer translate the failure into a clean JSON error, so the service logs with full context inline instead of relying on the central handler
 
 ## Cost Optimization
 - Cache system prompts with `cache_control: ephemeral`
@@ -109,16 +107,7 @@ main.py              # App setup, lifespan, logging config, and the single AppEr
 conda run -n code-roaster python -m pytest tests/ -v
 ```
 
-**Folder structure:**
-```
-tests/
-├── conftest.py             # shared fixtures (mock_reviewer, mock_github_service, client)
-├── mocks.py                # shared mock data
-├── test_routes.py          # /review/stream, /review/structured, /health
-├── test_auth.py            # /auth/github, /auth/github/callback
-├── test_pr.py              # /review/pr
-└── test_github_service.py  # GitHubService unit tests (URL parsing, diff fetch, OAuth exchange)
-```
+**Folder structure:** one `test_<module>.py` per route module or service under test (e.g. `routes/pr.py` → `test_pr.py`, `services/github.py` → `test_github_service.py`). Shared fixtures live in `conftest.py`, shared mock data in `mocks.py` — never duplicate a fixture inside an individual test file.
 
 **Async tests:** `pytest.ini` sets `asyncio_mode = auto` — no `@pytest.mark.asyncio` needed. All async test functions are picked up automatically.
 

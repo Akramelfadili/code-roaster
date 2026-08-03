@@ -1,7 +1,7 @@
 # Code Roaster — CLAUDE.md (Global)
 
 ## Project Overview
-AI-powered code review tool. Users paste code → get structured review with bugs, security issues, suggestions, and a score. Built by a full stack dev learning AI engineering.
+AI-powered code review tool. Users either paste code directly or connect their GitHub account and submit a pull request URL — either way, they get a structured review with bugs, security issues, suggestions, and a score. Built by a full stack dev learning AI engineering.
 
 ## Tech Stack
 - **Backend:** Python, FastAPI, Anthropic SDK (Claude Sonnet)
@@ -12,29 +12,9 @@ AI-powered code review tool. Users paste code → get structured review with bug
 ## Project Structure
 ```
 code-roaster/
-├── app/                  # FastAPI backend
-│   ├── models/           # Pydantic request/response models
-│   │   └── review.py
-│   ├── prompts/          # AI prompt strings and tool definitions
-│   │   └── review.py
-│   ├── routes/           # API route handlers
-│   ├── tests/            # Backend tests
-│   │   ├── conftest.py   # Pytest fixtures
-│   │   ├── mocks.py      # Shared mock data
-│   │   └── test_routes.py
-│   ├── main.py           # FastAPI entry point (run: uvicorn app.main:app)
-│   ├── reviewer.py       # AI reviewer logic
-│   ├── requirements.txt
-│   ├── requirements-dev.txt
-│   └── pytest.ini
-├── frontend/             # React frontend
-│   └── src/
-│       ├── api/          # API calls
-│       ├── hooks/        # Custom React hooks
-│       ├── components/   # UI components
-│       ├── types/        # TypeScript types/interfaces/enums
-│       ├── utils/        # Helper functions
-│       └── constants/    # Constants and magic values
+├── app/          # FastAPI backend — see app/CLAUDE.md for structure and conventions
+├── frontend/     # React frontend — see frontend/CLAUDE.md for structure and conventions
+├── docs/         # Architecture diagrams (Excalidraw)
 └── README.md
 ```
 
@@ -55,13 +35,12 @@ All commands run from the project root via `make`.
 | `make test-front` | Vitest suite in `frontend/` |
 | `make check-all` | Runs all checks (no format-back — it mutates) |
 
-## Error Handling
+## Secrets & Environment
+- All secrets (API keys, OAuth client ID/secret) live in root `.env`, gitignored, never committed — `.env.example` documents the required keys
+- Loaded exclusively through the backend's `Settings` (`app/config.py`) — see `app/CLAUDE.md`'s Configuration section
 
-- Input validation lives in Pydantic models (`field_validator`), not routes
-- Domain exceptions (`ReviewError`, `AIProviderError`, `MalformedAIResponseError`) live in `app/exceptions.py`
-- Routes never catch exceptions — they let them bubble up
-- Global handlers in `main.py` translate domain exceptions to HTTP responses
-- `reviewer.py` has zero knowledge of HTTP — it only raises domain exceptions
+## Documentation
+- `docs/` holds the architecture diagrams (Excalidraw) — update them for major structural changes so they don't go stale
 
 ## Git Rules
 - Never commit directly to main
