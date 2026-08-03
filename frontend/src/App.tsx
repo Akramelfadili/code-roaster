@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { CodeInput } from '@/components/CodeInput';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ErrorMessage } from '@/components/ErrorMessage';
 import { Header } from '@/components/Header';
 import { PRReviewPanel } from '@/components/PRReviewPanel';
@@ -54,7 +55,7 @@ export default function App(): JSX.Element {
       <main className="max-w-3xl mx-auto px-6 py-8 space-y-5">
         <ReviewModeTabs mode={reviewMode} onModeChange={setReviewMode} />
         {reviewMode === ReviewMode.Code ? (
-          <>
+          <ErrorBoundary>
             <CodeInput
               code={code}
               language={language}
@@ -74,17 +75,19 @@ export default function App(): JSX.Element {
             {reviewResult !== null && !isReviewInProgress && (
               <ReviewResult result={reviewResult} />
             )}
-          </>
+          </ErrorBoundary>
         ) : (
-          <PRReviewPanel
-            isAuthenticated={isAuthenticated}
-            prUrl={prUrl}
-            onPrUrlChange={setPrUrl}
-            isLoadingReview={isLoadingPRReview}
-            onSubmit={handlePrSubmit}
-            reviewError={prReviewError}
-            reviewResult={prReviewResult}
-          />
+          <ErrorBoundary>
+            <PRReviewPanel
+              isAuthenticated={isAuthenticated}
+              prUrl={prUrl}
+              onPrUrlChange={setPrUrl}
+              isLoadingReview={isLoadingPRReview}
+              onSubmit={handlePrSubmit}
+              reviewError={prReviewError}
+              reviewResult={prReviewResult}
+            />
+          </ErrorBoundary>
         )}
       </main>
     </div>

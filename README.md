@@ -20,8 +20,6 @@ Paste any code snippet, pick a language, and Code Roaster sends it to Claude for
 - **Suggestions** — performance, readability, and best-practice improvements
 - **Positives** — what the code already does well
 
-Reviews stream in real time so you're not staring at a blank screen.
-
 ---
 
 ## Tech Stack
