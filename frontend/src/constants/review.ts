@@ -25,3 +25,7 @@ export const SEVERITY_STYLES = {
   [Severity.High]: 'bg-orange-950 text-orange-400 border-orange-800',
   [Severity.Critical]: 'bg-red-950 text-red-400 border-red-800',
 } as const satisfies { [K in Severity]: string };
+
+export const SCORE_THRESHOLD_GOOD = 8;
+export const SCORE_THRESHOLD_MODERATE = 5;
+export const SCORE_THRESHOLD_POOR = 3;
