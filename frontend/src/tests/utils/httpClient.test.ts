@@ -39,6 +39,30 @@ describe('httpClient', () => {
       expect(result).toEqual({ foo: 'bar' });
     });
 
+    it('forwards request headers to fetch when provided', async () => {
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValue(mockResponse({ jsonBody: { foo: 'bar' } }));
+      vi.stubGlobal('fetch', mockFetch);
+
+      await httpClient.get(ENDPOINT, { Authorization: 'Bearer token' });
+
+      expect(mockFetch).toHaveBeenCalledWith(ENDPOINT, {
+        headers: { Authorization: 'Bearer token' },
+      });
+    });
+
+    it('calls fetch without an init object when no headers are provided', async () => {
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValue(mockResponse({ jsonBody: { foo: 'bar' } }));
+      vi.stubGlobal('fetch', mockFetch);
+
+      await httpClient.get(ENDPOINT);
+
+      expect(mockFetch).toHaveBeenCalledWith(ENDPOINT, undefined);
+    });
+
     it('classifies a 429 response as RateLimitError', async () => {
       vi.stubGlobal(
         'fetch',

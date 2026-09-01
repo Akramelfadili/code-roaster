@@ -6,6 +6,7 @@ import type { GitHubUser } from '@/types/auth';
 interface HeaderProps {
   isAuthenticated: boolean;
   githubUser: GitHubUser | null;
+  hasGitHubUserError: boolean;
   onLogin: () => void;
   onLogout: () => void;
 }
@@ -13,6 +14,7 @@ interface HeaderProps {
 export function Header({
   isAuthenticated,
   githubUser,
+  hasGitHubUserError,
   onLogin,
   onLogout,
 }: HeaderProps): JSX.Element {
@@ -30,6 +32,7 @@ export function Header({
         <AuthStatus
           isAuthenticated={isAuthenticated}
           githubUser={githubUser}
+          hasGitHubUserError={hasGitHubUserError}
           onLogin={onLogin}
           onLogout={onLogout}
         />

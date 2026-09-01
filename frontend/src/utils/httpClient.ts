@@ -44,9 +44,9 @@ async function post<T>(endpoint: string, body: unknown): Promise<T> {
   }
 }
 
-async function get<T>(endpoint: string): Promise<T> {
+async function get<T>(endpoint: string, headers?: Record<string, string>): Promise<T> {
   try {
-    const response = await fetch(endpoint);
+    const response = await fetch(endpoint, headers ? { headers } : undefined);
     await throwIfNotOk(response);
     return response.json() as Promise<T>;
   } catch (error) {

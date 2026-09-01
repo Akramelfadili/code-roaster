@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import App from '@/App';
+import { GITHUB_SESSION_EXPIRED_MESSAGE } from '@/constants/auth';
 import { useGitHubAuth } from '@/hooks/useGitHubAuth';
 import { useGitHubUser } from '@/hooks/useGitHubUser';
 import { usePRReview } from '@/hooks/usePRReview';
@@ -47,6 +48,7 @@ const loggedOutAuthState = {
 const idleGitHubUserState = {
   githubUser: null,
   isLoadingGitHubUser: false,
+  gitHubUserError: null,
 };
 
 const mockResult: ReviewData = {
@@ -159,6 +161,7 @@ describe('App', () => {
     vi.mocked(useGitHubUser).mockReturnValue({
       githubUser: { username: 'octocat', avatarUrl: 'https://a.png' },
       isLoadingGitHubUser: false,
+      gitHubUserError: null,
     });
 
     render(<App />);
@@ -182,6 +185,26 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'Logout' }));
 
     expect(mockLogout).toHaveBeenCalledOnce();
+  });
+
+  it('shows the session-expired state in the header when the GitHub user fetch fails', () => {
+    vi.mocked(useGitHubAuth).mockReturnValue({
+      ...loggedOutAuthState,
+      githubToken: 'gh-token',
+      isAuthenticated: true,
+    });
+    vi.mocked(useGitHubUser).mockReturnValue({
+      ...idleGitHubUserState,
+      gitHubUserError: new AppError(AppErrorCode.ApiError, 'Request failed (401)', 401),
+    });
+
+    render(<App />);
+
+    expect(screen.getByText(GITHUB_SESSION_EXPIRED_MESSAGE)).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Log in with GitHub' })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Logout' })).not.toBeInTheDocument();
   });
 
   it('shows the PR input once authenticated', async () => {

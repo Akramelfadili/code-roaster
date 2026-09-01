@@ -1,3 +1,5 @@
+import type { AppError } from '@/types/errors';
+
 export interface UseGitHubAuthReturn {
   githubToken: string | null;
   isAuthenticated: boolean;
@@ -13,4 +15,5 @@ export interface GitHubUser {
 export interface UseGitHubUserReturn {
   githubUser: GitHubUser | null;
   isLoadingGitHubUser: boolean;
+  gitHubUserError: AppError | null;
 }

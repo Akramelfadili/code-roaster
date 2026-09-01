@@ -35,7 +35,7 @@ export default function App(): JSX.Element {
   const showStreamingText = streamingText.length > 0 && reviewResult === null;
 
   const { githubToken, isAuthenticated, loginWithGitHub, logout } = useGitHubAuth();
-  const { githubUser } = useGitHubUser(githubToken);
+  const { githubUser, gitHubUserError } = useGitHubUser(githubToken);
   const { submitPRReview, isLoadingPRReview, prReviewError, prReviewResult } =
     usePRReview();
   const {
@@ -49,6 +49,7 @@ export default function App(): JSX.Element {
       <Header
         isAuthenticated={isAuthenticated}
         githubUser={githubUser}
+        hasGitHubUserError={gitHubUserError !== null}
         onLogin={loginWithGitHub}
         onLogout={logout}
       />

@@ -5,6 +5,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 import { fetchGitHubUser } from '@/api/github';
 import { useGitHubUser } from '@/hooks/useGitHubUser';
+import { AppError, AppErrorCode } from '@/types/errors';
 
 vi.mock('@/api/github');
 
@@ -24,6 +25,25 @@ describe('useGitHubUser', () => {
     });
 
     expect(fetchGitHubUser).not.toHaveBeenCalled();
+    expect(result.current.githubUser).toBeNull();
+    expect(result.current.gitHubUserError).toBeNull();
+  });
+
+  it('surfaces the AppError when the GitHub user fetch fails', async () => {
+    vi.mocked(fetchGitHubUser).mockRejectedValue(
+      new AppError(AppErrorCode.ApiError, 'Request failed (401)', 401)
+    );
+
+    const { result } = renderHook(() => useGitHubUser('revoked-token'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() =>
+      expect(result.current.gitHubUserError).toMatchObject({
+        code: AppErrorCode.ApiError,
+        statusCode: 401,
+      })
+    );
     expect(result.current.githubUser).toBeNull();
   });
 
