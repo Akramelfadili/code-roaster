@@ -12,7 +12,6 @@ export function usePRReview(): UsePRReviewReturn {
     data: prReviewResult,
   } = useMutation<ReviewData, AppError, PRReviewRequest>({
     mutationFn: fetchPRReview,
-    retry: 0,
   });
 
   async function submitPRReview(request: PRReviewRequest): Promise<void> {

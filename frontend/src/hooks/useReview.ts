@@ -19,7 +19,6 @@ export function useReview(): UseReviewReturn {
     reset: resetStructured,
   } = useMutation<ReviewData, AppError, ReviewRequest>({
     mutationFn: fetchReview,
-    retry: 0,
   });
 
   async function submitReview(request: ReviewRequest): Promise<void> {
