@@ -40,6 +40,16 @@ src/
 - Use `.default([])` on array fields so a missing field fails safe instead of crashing components that `.map()` over it
 - Hooks and components never see unvalidated data — the parsing call happens before data leaves `src/api/`
 
+## API Response Mapping
+- Every API response must be mapped through a mapper function before it reaches a hook or component — raw DTO types never leave the `src/api/` layer
+- Each feature defines two shapes in `src/types/`:
+  - a `*DTO` type — the raw snake_case wire shape (for review responses, `ReviewDTO` is `z.infer<typeof ReviewResultSchema>`)
+  - a camelCase domain type (e.g. `ReviewData`) — the only shape hooks and components ever see
+- The mapper lives in `src/api/` next to the fetch functions, named `mapTo<DomainType>` (e.g. `mapToReviewData(dto: ReviewDTO): ReviewData`, `mapToGitHubUser(dto): GitHubUser`), with an explicit return type
+- API functions return the domain type: validate first (`parseReviewResult` returns the DTO), then map — `return mapToReviewData(parseReviewResult(response))`
+- One mapper per feature domain — reuse it across endpoints (both `src/api/review.ts` and `src/api/pr.ts` map through `mapToReviewData`)
+- DTO types and `*ApiResponse`/`*DTO` interfaces stay inside `src/api/` or `src/types/`; never import a DTO type into `src/hooks/` or `src/components/`
+
 ## `types/` vs `utils/`
 - `src/types/` holds shape only: interfaces, enums, Zod schemas, and types inferred from them (`z.infer<...>`). Nothing in `types/` should execute logic or throw.
 - Any function that runs validation, transforms data, or converts one error type into another (e.g. a Zod `safeParse` result into an `AppError`) is behavior, not shape — it belongs in `src/utils/`, named after the feature (e.g. `parseReviewResult` in `src/utils/review.ts`), and imports the schema/types it needs from `src/types/`

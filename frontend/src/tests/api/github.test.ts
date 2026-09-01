@@ -1,7 +1,16 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-import { fetchGitHubUser } from '@/api/github';
+import { fetchGitHubUser, mapToGitHubUser } from '@/api/github';
 import { GITHUB_USER_ENDPOINT } from '@/constants/auth';
+
+describe('mapToGitHubUser', () => {
+  it('maps the GitHub API user fields to the domain shape', () => {
+    expect(mapToGitHubUser({ login: 'octocat', avatar_url: 'https://a.png' })).toEqual({
+      username: 'octocat',
+      avatarUrl: 'https://a.png',
+    });
+  });
+});
 
 describe('fetchGitHubUser', () => {
   afterEach(() => {

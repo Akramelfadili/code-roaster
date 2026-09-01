@@ -54,7 +54,7 @@ const mockResult: ReviewData = {
   severity: Severity.Low,
   score: 9,
   bugs: [],
-  security_issues: [],
+  securityIssues: [],
   suggestions: [],
   positives: ['Well structured'],
 };

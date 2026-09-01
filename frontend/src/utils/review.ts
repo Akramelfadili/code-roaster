@@ -1,7 +1,7 @@
 import { AppError, AppErrorCode } from '@/types/errors';
-import { ReviewResultSchema, type ReviewData } from '@/types/review';
+import { ReviewResultSchema, type ReviewDTO } from '@/types/review';
 
-export function parseReviewResult(data: unknown): ReviewData {
+export function parseReviewResult(data: unknown): ReviewDTO {
   const result = ReviewResultSchema.safeParse(data);
   if (!result.success) {
     throw new AppError(

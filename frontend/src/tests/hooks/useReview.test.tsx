@@ -18,7 +18,7 @@ const mockResult: ReviewData = {
   severity: Severity.Low,
   score: 8,
   bugs: [],
-  security_issues: [],
+  securityIssues: [],
   suggestions: ['Add explicit return types'],
   positives: ['Clean variable naming'],
 };

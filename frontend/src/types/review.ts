@@ -39,7 +39,20 @@ export const ReviewResultSchema = z.object({
   positives: z.array(z.string()).default([]),
 });
 
-export type ReviewData = z.infer<typeof ReviewResultSchema>;
+/** Raw snake_case API wire shape. Never leaves the `src/api/` layer. */
+export type ReviewDTO = z.infer<typeof ReviewResultSchema>;
+
+/** camelCase domain shape consumed by hooks and components. */
+export interface ReviewData {
+  detectedLanguage?: string;
+  summary: string;
+  severity: Severity;
+  score: number;
+  bugs: string[];
+  securityIssues: string[];
+  suggestions: string[];
+  positives: string[];
+}
 
 export interface UseReviewReturn {
   submitReview: (request: ReviewRequest) => Promise<void>;
