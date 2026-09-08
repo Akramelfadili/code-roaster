@@ -1,4 +1,8 @@
+from typing import TypedDict
+
 import anthropic
+
+from app.constants import SEVERITY_VALUES, Severity
 
 SECURITY_REVIEW_SYSTEM_PROMPT = """\
 You are a security expert. Review the code for security vulnerabilities only.
@@ -13,6 +17,24 @@ STRUCTURED_REVIEW_SYSTEM_PROMPT = (
     "tool to submit your structured findings. Always populate detected_language "
     "with the programming language you identify in the submitted code."
 )
+
+
+class ReviewToolOutput(TypedDict):
+    """Shape of the arguments Claude submits via the `submit_code_review` tool.
+
+    Kept next to `STRUCTURED_REVIEW_TOOL` since it's a typed mirror of that
+    schema's `properties` — update both together.
+    """
+
+    detected_language: str
+    summary: str
+    severity: Severity
+    score: int
+    bugs: list[str]
+    security_issues: list[str]
+    suggestions: list[str]
+    positives: list[str]
+
 
 STRUCTURED_REVIEW_TOOL: anthropic.types.ToolParam = {
     "name": "submit_code_review",
@@ -38,7 +60,7 @@ STRUCTURED_REVIEW_TOOL: anthropic.types.ToolParam = {
             },
             "severity": {
                 "type": "string",
-                "enum": ["low", "medium", "high", "critical"],
+                "enum": list(SEVERITY_VALUES),
                 "description": "Overall severity of issues found.",
             },
             "score": {

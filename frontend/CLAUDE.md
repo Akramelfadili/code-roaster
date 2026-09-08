@@ -33,6 +33,28 @@ src/
 - Never call `fetch` directly in API functions — use `httpClient.post<T>(endpoint, body)`
 - Error handling and JSON parsing live in `httpClient` only — never inline them
 
+## Runtime Validation
+- All API responses must be validated with a Zod schema at the API boundary — never trust `response.json() as T` past that point
+- Zod schemas live in `src/types/` next to the feature they describe (e.g. `ReviewResultSchema` in `src/types/review.ts`)
+- TypeScript types for API response shapes must be inferred from their Zod schema with `z.infer<typeof Schema>` — never hand-written as a separate `interface`/`type`
+- Use `.default([])` on array fields so a missing field fails safe instead of crashing components that `.map()` over it
+- Hooks and components never see unvalidated data — the parsing call happens before data leaves `src/api/`
+
+## API Response Mapping
+- Every API response must be mapped through a mapper function before it reaches a hook or component — raw DTO types never leave the `src/api/` layer
+- Each feature defines two shapes in `src/types/`:
+  - a `*DTO` type — the raw snake_case wire shape (for review responses, `ReviewDTO` is `z.infer<typeof ReviewResultSchema>`)
+  - a camelCase domain type (e.g. `ReviewData`) — the only shape hooks and components ever see
+- The mapper lives in `src/api/` next to the fetch functions, named `mapTo<DomainType>` (e.g. `mapToReviewData(dto: ReviewDTO): ReviewData`, `mapToGitHubUser(dto): GitHubUser`), with an explicit return type
+- API functions return the domain type: validate first (`parseReviewResult` returns the DTO), then map — `return mapToReviewData(parseReviewResult(response))`
+- One mapper per feature domain — reuse it across endpoints (both `src/api/review.ts` and `src/api/pr.ts` map through `mapToReviewData`)
+- DTO types and `*ApiResponse`/`*DTO` interfaces stay inside `src/api/` or `src/types/`; never import a DTO type into `src/hooks/` or `src/components/`
+
+## `types/` vs `utils/`
+- `src/types/` holds shape only: interfaces, enums, Zod schemas, and types inferred from them (`z.infer<...>`). Nothing in `types/` should execute logic or throw.
+- Any function that runs validation, transforms data, or converts one error type into another (e.g. a Zod `safeParse` result into an `AppError`) is behavior, not shape — it belongs in `src/utils/`, named after the feature (e.g. `parseReviewResult` in `src/utils/review.ts`), and imports the schema/types it needs from `src/types/`
+- Rule of thumb: if removing `export function` would make it a `.d.ts`-shaped file, it belongs in `types/`; if it has a body that does work, it belongs in `utils/`
+
 ## TypeScript Standards
 - Strict mode always on
 - No `any` — ever. Use `unknown` and narrow it
@@ -42,7 +64,17 @@ src/
 - Props interfaces always explicitly defined above the component
 
 ## React Standards
-- Functional components only — no class components
+- Functional components only — no class components. Error boundaries are the one case React can't do without a class (`componentDidCatch`/`getDerivedStateFromError` have no hook equivalent) — use the `react-error-boundary` package, which wraps that class internally and exposes a functional `<ErrorBoundary>` API. Never hand-write a class component for this.
+- Always destructure props in the function signature — never reference `props.x` in the body:
+  ```typescript
+  // Good
+  export function Foo({ bar, baz }: FooProps): JSX.Element { ... }
+
+  // Bad
+  export function Foo(props: FooProps): JSX.Element {
+    return <div>{props.bar}</div>
+  }
+  ```
 - Return statement is always last in a component
 - Loading and error checks happen BEFORE the return statement
 - No API calls inside components — use hooks

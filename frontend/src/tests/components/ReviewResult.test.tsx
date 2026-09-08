@@ -3,14 +3,14 @@ import { describe, it, expect } from 'vitest';
 
 import { ReviewResult } from '@/components/ReviewResult';
 import { Severity } from '@/types/review';
-import type { ReviewResult as ReviewResultType } from '@/types/review';
+import type { ReviewData } from '@/types/review';
 
-const baseResult: ReviewResultType = {
+const baseResult: ReviewData = {
   summary: 'Code has a few issues to address.',
   severity: Severity.High,
   score: 4,
   bugs: ['Off-by-one error in loop', 'Null pointer dereference possible'],
-  security_issues: ['SQL injection risk on line 12'],
+  securityIssues: ['SQL injection risk on line 12'],
   suggestions: ['Extract magic numbers into constants', 'Add input validation'],
   positives: ['Good function naming', 'Consistent formatting'],
 };
@@ -54,7 +54,7 @@ describe('ReviewResult', () => {
   });
 
   it('does not render a section heading when its list is empty', () => {
-    render(<ReviewResult result={{ ...baseResult, bugs: [], security_issues: [] }} />);
+    render(<ReviewResult result={{ ...baseResult, bugs: [], securityIssues: [] }} />);
     expect(screen.queryByRole('heading', { name: /Bugs/i })).not.toBeInTheDocument();
     expect(
       screen.queryByRole('heading', { name: /Security Issues/i })

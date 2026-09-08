@@ -20,8 +20,6 @@ Paste any code snippet, pick a language, and Code Roaster sends it to Claude for
 - **Suggestions** — performance, readability, and best-practice improvements
 - **Positives** — what the code already does well
 
-Reviews stream in real time so you're not staring at a blank screen.
-
 ---
 
 ## Tech Stack
@@ -262,44 +260,6 @@ All review endpoints accept:
 }
 ```
 
----
-
-## Roadmap
-
-### V1 — Foundation ✅
-- FastAPI backend with `/review` endpoint
-- Claude integration via Anthropic SDK with prompt caching
-- Basic text review response
-- Conda environment and project structure
-
-### V2 — Structured Reviews + Frontend ✅
-- Streaming review endpoint (`/review/stream`)
-- Structured review via Claude function calling (`/review/structured`)
-- React + TypeScript frontend with Tailwind CSS
-- Score display, severity badge, and categorised findings
-- Full quality toolchain: Ruff, Mypy, Bandit, ESLint, Prettier, pre-commit
-- Pytest + Vitest test suites
-
-### V3 — Polish + UX (planned)
-- Syntax-highlighted code editor
-- Language auto-detection
-- Review history stored in `localStorage`
-- Copy-to-clipboard for individual findings
-- Keyboard shortcuts
-
-### V4 — Persistence + Accounts (planned)
-- User authentication (OAuth)
-- Saved review history with search
-- Shareable review links
-- Usage dashboard and token cost tracking
-
-### V5 — Integrations (planned)
-- GitHub App for automatic PR reviews
-- VS Code extension
-- CLI tool (`roast <file>`)
-- Diff-aware reviews (only review what changed)
-
----
 
 ## License
 

@@ -1,0 +1,151 @@
+import logging
+from collections.abc import AsyncIterator
+from typing import cast
+
+import anthropic
+from anthropic import APIError
+
+from app.config import settings
+from app.constants import ANTHROPIC_MAX_TOKENS, ANTHROPIC_MODEL
+from app.exceptions import (
+    AIProviderError,
+    AIProviderRateLimitError,
+    MalformedAIResponseError,
+)
+from app.models.review import StructuredReview
+from app.prompts.review import (
+    SECURITY_REVIEW_SYSTEM_PROMPT,
+    STRUCTURED_REVIEW_SYSTEM_PROMPT,
+    STRUCTURED_REVIEW_TOOL,
+    ReviewToolOutput,
+)
+
+logger = logging.getLogger(__name__)
+
+_AUTO_LANGUAGE = "auto"
+# STRUCTURED_REVIEW_TOOL marks bugs/security_issues/suggestions/positives as
+# required too, but Claude has been observed to omit them despite that, so
+# they're deliberately excluded here and defaulted via `.get(..., [])` below
+# instead of raising. TODO: decide whether to loosen the schema to match this
+# (needs a live test against the real API to see if that changes compliance,
+# rather than guessing) — see conversation from 2026-07-28.
+_REQUIRED_REVIEW_FIELDS = ("summary", "severity", "score", "detected_language")
+
+
+def _require_review_fields(data: ReviewToolOutput) -> None:
+    missing = [field for field in _REQUIRED_REVIEW_FIELDS if field not in data]
+    if missing:
+        raise MalformedAIResponseError(
+            f"Tool response missing required fields: {', '.join(missing)}"
+        )
+
+
+class CodeReviewer:
+    def __init__(self, client: anthropic.AsyncAnthropic | None = None) -> None:
+        self.client = client or anthropic.AsyncAnthropic(
+            api_key=settings.anthropic_api_key
+        )
+        self.model = ANTHROPIC_MODEL
+
+    def _build_review_message(self, code: str, language: str) -> str:
+        if language == _AUTO_LANGUAGE:
+            return (
+                "Review this code (detect the language automatically):"
+                f"\n\n```\n{code}\n```"
+            )
+        return f"Review this {language} code:\n\n```{language}\n{code}\n```"
+
+    async def review_structured(
+        self, code: str, language: str = "python"
+    ) -> StructuredReview:
+        try:
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=ANTHROPIC_MAX_TOKENS,
+                system=[
+                    {
+                        "type": "text",
+                        "text": STRUCTURED_REVIEW_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                tools=[STRUCTURED_REVIEW_TOOL],
+                tool_choice={"type": "tool", "name": "submit_code_review"},
+                messages=[
+                    {
+                        "role": "user",
+                        "content": self._build_review_message(code, language),
+                    }
+                ],
+            )
+        except anthropic.RateLimitError as e:
+            raise AIProviderRateLimitError("Anthropic API rate limit exceeded") from e
+        except APIError as e:
+            raise AIProviderError("Anthropic API call failed") from e
+
+        logger.info(
+            f"Token usage — type=structured input={response.usage.input_tokens} "
+            f"output={response.usage.output_tokens}"
+        )
+
+        tool_use_block = next(
+            (b for b in response.content if b.type == "tool_use"), None
+        )
+        if tool_use_block is None:
+            raise MalformedAIResponseError("No tool_use block in response")
+        data = cast(ReviewToolOutput, tool_use_block.input)
+        _require_review_fields(data)
+        return StructuredReview(
+            detected_language=data["detected_language"],
+            summary=data["summary"],
+            severity=data["severity"],
+            score=data["score"],
+            bugs=data.get("bugs", []),
+            security_issues=data.get("security_issues", []),
+            suggestions=data.get("suggestions", []),
+            positives=data.get("positives", []),
+        )
+
+    async def review_pr_diff(self, pr_label: str, diff: str) -> StructuredReview:
+        """Review a GitHub PR's diff, labeled for context (e.g. "owner/repo#1")."""
+        code_context = f"Pull request {pr_label}:\n\n```diff\n{diff}\n```"
+        return await self.review_structured(code=code_context, language="diff")
+
+    async def review_stream(
+        self, code: str, language: str = "python"
+    ) -> AsyncIterator[str]:
+        try:
+            async with self.client.messages.stream(
+                model=self.model,
+                max_tokens=ANTHROPIC_MAX_TOKENS,
+                system=[
+                    {
+                        "type": "text",
+                        "text": SECURITY_REVIEW_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": self._build_review_message(code, language),
+                    }
+                ],
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield text
+                final_message = await stream.get_final_message()
+                usage = final_message.usage
+                logger.info(
+                    f"Token usage — type=stream input={usage.input_tokens} "
+                    f"output={usage.output_tokens}"
+                )
+        except anthropic.RateLimitError as e:
+            # The client's exception handler can't cleanly turn this into a JSON
+            # error response once streaming has started sending bytes, so log
+            # here with full context rather than relying on main.py to do it.
+            logger.warning(f"Anthropic API rate limit exceeded mid-stream: {e}")
+            raise AIProviderRateLimitError("Anthropic API rate limit exceeded") from e
+        except APIError as e:
+            logger.error(f"Anthropic API call failed mid-stream: {e}", exc_info=e)
+            raise AIProviderError("Anthropic API call failed") from e

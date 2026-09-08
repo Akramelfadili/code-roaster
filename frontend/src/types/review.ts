@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import type { AppError } from '@/types/errors';
 
 export const Severity = {
@@ -26,13 +28,28 @@ export interface ReviewRequest {
   language: Language;
 }
 
-export interface ReviewResult {
-  detected_language?: string;
+export const ReviewResultSchema = z.object({
+  detected_language: z.string().optional(),
+  summary: z.string(),
+  severity: z.enum(Severity),
+  score: z.number(),
+  bugs: z.array(z.string()).default([]),
+  security_issues: z.array(z.string()).default([]),
+  suggestions: z.array(z.string()).default([]),
+  positives: z.array(z.string()).default([]),
+});
+
+/** Raw snake_case API wire shape. Never leaves the `src/api/` layer. */
+export type ReviewDTO = z.infer<typeof ReviewResultSchema>;
+
+/** camelCase domain shape consumed by hooks and components. */
+export interface ReviewData {
+  detectedLanguage?: string;
   summary: string;
   severity: Severity;
   score: number;
   bugs: string[];
-  security_issues: string[];
+  securityIssues: string[];
   suggestions: string[];
   positives: string[];
 }
@@ -43,5 +60,24 @@ export interface UseReviewReturn {
   isStreaming: boolean;
   isLoadingStructured: boolean;
   reviewError: AppError | null;
-  reviewResult: ReviewResult | null;
+  reviewResult: ReviewData | null;
+}
+
+export const ReviewMode = {
+  Code: 'code',
+  PR: 'pr',
+} as const;
+
+export type ReviewMode = (typeof ReviewMode)[keyof typeof ReviewMode];
+
+export interface PRReviewRequest {
+  prUrl: string;
+  githubToken: string;
+}
+
+export interface UsePRReviewReturn {
+  submitPRReview: (request: PRReviewRequest) => Promise<void>;
+  isLoadingPRReview: boolean;
+  prReviewError: AppError | null;
+  prReviewResult: ReviewData | null;
 }

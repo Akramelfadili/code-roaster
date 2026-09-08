@@ -1,6 +1,8 @@
-from typing import Literal
+from typing import Self
 
 from pydantic import BaseModel, Field, field_validator
+
+from app.constants import Severity
 
 
 class ReviewRequest(BaseModel):
@@ -15,16 +17,49 @@ class ReviewRequest(BaseModel):
         return v
 
 
-class ReviewResponse(BaseModel):
-    review: str
-
-
 class StructuredReviewResponse(BaseModel):
     detected_language: str
     summary: str
-    severity: Literal["low", "medium", "high", "critical"]
+    severity: Severity
     score: int = Field(ge=1, le=10)
     bugs: list[str]
     security_issues: list[str]
     suggestions: list[str]
     positives: list[str]
+
+    @classmethod
+    def from_domain(cls, review: "StructuredReview") -> Self:
+        return cls(
+            detected_language=review.detected_language,
+            summary=review.summary,
+            severity=review.severity,
+            score=review.score,
+            bugs=review.bugs,
+            security_issues=review.security_issues,
+            suggestions=review.suggestions,
+            positives=review.positives,
+        )
+
+
+class StructuredReview:
+    """Domain result of an AI code review, as produced by `CodeReviewer`."""
+
+    def __init__(
+        self,
+        detected_language: str,
+        summary: str,
+        severity: Severity,
+        score: int,
+        bugs: list[str],
+        security_issues: list[str],
+        suggestions: list[str],
+        positives: list[str],
+    ) -> None:
+        self.detected_language = detected_language
+        self.summary = summary
+        self.severity = severity
+        self.score = score
+        self.bugs = bugs
+        self.security_issues = security_issues
+        self.suggestions = suggestions
+        self.positives = positives

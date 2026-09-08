@@ -1,6 +1,13 @@
-import { Language, Severity } from '@/types/review';
+import { Language, ReviewMode, Severity } from '@/types/review';
 
 export const LANGUAGES = Object.values(Language);
+
+export const REVIEW_MODES = Object.values(ReviewMode);
+
+export const REVIEW_MODE_LABELS = {
+  [ReviewMode.Code]: 'Review Code',
+  [ReviewMode.PR]: 'Review PR',
+} as const satisfies Record<ReviewMode, string>;
 
 export const LANGUAGE_LABELS: Record<Language, string> = {
   [Language.Auto]: 'Auto-detect',
@@ -18,3 +25,7 @@ export const SEVERITY_STYLES = {
   [Severity.High]: 'bg-orange-950 text-orange-400 border-orange-800',
   [Severity.Critical]: 'bg-red-950 text-red-400 border-red-800',
 } as const satisfies { [K in Severity]: string };
+
+export const SCORE_THRESHOLD_GOOD = 8;
+export const SCORE_THRESHOLD_MODERATE = 5;
+export const SCORE_THRESHOLD_POOR = 3;

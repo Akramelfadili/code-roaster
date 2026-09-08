@@ -15,11 +15,8 @@ export function Section({ title, items, icon }: SectionProps): JSX.Element | nul
         {icon} {title}
       </h3>
       <ul className="space-y-2">
-        {items.map((item, i) => (
-          <li
-            key={`${title}-${i}`}
-            className="flex gap-2.5 text-sm text-gray-300 leading-snug"
-          >
+        {items.map((item) => (
+          <li key={item} className="flex gap-2.5 text-sm text-gray-300 leading-snug">
             <span className="text-gray-600 shrink-0 mt-0.5">—</span>
             <span>{item}</span>
           </li>

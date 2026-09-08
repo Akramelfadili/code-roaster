@@ -32,7 +32,11 @@ export function StreamingText({
   const isActive = isStreaming || isLoadingStructured;
 
   return (
-    <div className="border border-gray-800 rounded-lg overflow-hidden">
+    <div
+      className="border border-gray-800 rounded-lg overflow-hidden"
+      aria-live="polite"
+      aria-atomic="false"
+    >
       <div className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
         <span className="text-xs text-gray-500 uppercase tracking-widest">
           {statusLabel(isStreaming, isLoadingStructured)}
