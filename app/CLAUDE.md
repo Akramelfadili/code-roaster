@@ -18,7 +18,8 @@ app/
 ├── services/
 │   ├── reviewer.py        # CodeReviewer class — all AI logic lives here
 │   ├── github.py          # GitHubService — OAuth token exchange, PR URL parsing, diff fetch
-│   └── github_errors.py   # GitHub-specific error translation (raise_for_github_response, is_rate_limited)
+│   ├── github_errors.py   # GitHub-specific error translation (raise_for_github_response, is_rate_limited)
+│   └── chunker.py         # CodeChunker + Chunk — splits source files into chunks for the RAG pipeline
 └── routes/
     ├── __init__.py
     ├── review.py       # /review/stream, /review/structured
@@ -67,6 +68,52 @@ main.py              # App setup, lifespan, logging config, and the exception ha
 - Streaming for text responses, `create()` for structured output
 - Handle `RateLimitError` and `APIError` explicitly
 - Log token usage on every call
+
+## RAG Pipeline
+
+The codebase-indexing feature embeds a repository's source and retrieves relevant
+context at review time. Its stages (chunk → embed → store → retrieve) all pass the
+same unit around.
+
+### `Chunk` — the standard data structure
+
+`Chunk` (`app/services/chunker.py`) is a frozen, slotted dataclass and the one
+type every RAG stage exchanges. Do not introduce a parallel "code fragment" /
+"snippet" type — extend `Chunk`, or wrap it, instead.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `content` | `str` | The slice's source text, newline-joined |
+| `file_path` | `str` | Path of the source file, exactly as passed to `chunk_file` (never re-read from disk) |
+| `start_line` | `int` | 1-indexed first line, inclusive |
+| `end_line` | `int` | 1-indexed last line, inclusive |
+| `language` | `str` | Canonical language name — one of `CodeChunker.SUPPORTED_LANGUAGES` |
+
+### Chunking strategy
+
+`CodeChunker.chunk_file(file_path, content, language)` returns `list[Chunk]` in
+source order, applying, per file:
+
+1. **Definition-aligned split (preferred).** Lines are cut into segments at each
+   `function`/`class`-style definition for the language (regex-based, one pattern
+   per language). Lines before the first definition (imports, `package`/`use`
+   declarations) form a leading segment. Adjacent segments are then merged while
+   the combined span stays within the **max chunk size (100 lines)**, so small
+   helpers group together and large ones stand alone.
+2. **Fixed-size fallback.** Any single definition longer than 100 lines, and any
+   file whose language exposes no recognisable definitions, is windowed into
+   **50-line chunks overlapping by 10 lines**.
+3. **Minimum size.** Chunks shorter than **5 lines** are dropped. A blank file,
+   or one that yields only sub-5-line fragments, produces `[]`.
+
+Supported languages (case-insensitive, common aliases like `ts`/`golang`
+resolved): **Python, TypeScript, JavaScript, Go, Rust, Java**. An unsupported
+language raises `ValueError` — it's a caller contract violation, not a modelled
+domain failure, so it is not an `AppError` subclass.
+
+Size thresholds default from module constants but are constructor-overridable
+(`CodeChunker(max_chunk_lines=..., fixed_chunk_size_lines=..., ...)`) for tests
+and tuning.
 
 ## Error Handling
 
