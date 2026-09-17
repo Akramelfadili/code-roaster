@@ -115,6 +115,31 @@ Size thresholds default from module constants but are constructor-overridable
 (`CodeChunker(max_chunk_lines=..., fixed_chunk_size_lines=..., ...)`) for tests
 and tuning.
 
+### Embedding
+
+`Embedder` (`app/services/embedder.py`) is the chunk → vector stage. It wraps
+Voyage AI's async client (`voyageai.AsyncClient`, keyed with `voyage_api_key`
+from `Settings`) and the `voyage-code-3` model — Voyage AI's strongest
+code-embedding model.
+
+- `embed_chunks(chunks: list[Chunk]) -> list[list[float]]` embeds each chunk's
+  `content` as a `document` vector, one per chunk, in input order. Requests are
+  batched at **128 inputs** (Voyage AI's per-request limit); an empty list makes
+  no API call.
+- `embed_query(query: str) -> list[float]` embeds a single search string as a
+  `query` vector for retrieval time. Documents and queries are embedded with
+  their matching `input_type` so they share one vector space.
+- Both methods are `async` (the rest of the app is async, and the underlying
+  `voyageai.AsyncClient.embed` is a coroutine).
+- Voyage AI failures are translated in one place (`Embedder._embed`):
+  `voyageai.error.RateLimitError` → `AIProviderRateLimitError`, any other
+  `voyageai.error.VoyageError` → `AIProviderError`. Token usage is logged on
+  every call.
+- The constructor takes an optional `client` so tests inject a fake instead of
+  hitting the API. Model name, batch size, and the `input_type` values are
+  module-local constants, not in `app/constants.py` (nothing else refers to
+  them — same rationale as the chunker's thresholds).
+
 ## Error Handling
 
 - Never let raw exceptions bubble up to the client
