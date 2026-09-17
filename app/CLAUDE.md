@@ -19,7 +19,9 @@ app/
 │   ├── reviewer.py        # CodeReviewer class — all AI logic lives here
 │   ├── github.py          # GitHubService — OAuth token exchange, PR URL parsing, diff fetch
 │   ├── github_errors.py   # GitHub-specific error translation (raise_for_github_response, is_rate_limited)
-│   └── chunker.py         # CodeChunker + Chunk — splits source files into chunks for the RAG pipeline
+│   ├── chunker.py         # CodeChunker + Chunk — splits source files into chunks for the RAG pipeline
+│   ├── embedder.py        # Embedder — turns Chunks into vectors via Voyage AI
+│   └── vector_store.py    # VectorStore — persists and searches chunk embeddings via Chroma
 └── routes/
     ├── __init__.py
     ├── review.py       # /review/stream, /review/structured
@@ -139,6 +141,36 @@ code-embedding model.
   hitting the API. Model name, batch size, and the `input_type` values are
   module-local constants, not in `app/constants.py` (nothing else refers to
   them — same rationale as the chunker's thresholds).
+
+### Vector storage
+
+`VectorStore` (`app/services/vector_store.py`) is the store/retrieve stage —
+it wraps a persistent Chroma collection (`chromadb.PersistentClient`), one
+collection per repository.
+
+- The constructor takes `collection_name: str` (callers scope this per
+  repository so chunks from different repos never mix) and
+  `persist_directory: str`, defaulting to `data/chroma` at the project root
+  (relative to the process's working directory, which is the project root
+  for every `make`/`uvicorn` entry point). `data/chroma` is gitignored —
+  it's local, rebuildable index data, not source.
+- `add_chunks(chunks: list[Chunk], embeddings: list[list[float]]) -> None`
+  upserts each chunk's vector, source text, and metadata
+  (`file_path`, `start_line`, `end_line`, `language`) under a deterministic
+  ID, `{file_path}:{start_line}:{end_line}`. Re-adding the same file range
+  overwrites the existing record instead of duplicating it, so re-indexing is
+  idempotent. Raises `ValueError` if `chunks` and `embeddings` differ in
+  length — a caller contract violation, not a modelled domain failure, so it
+  is not an `AppError` subclass (same rationale as the chunker's unsupported
+  language check). A no-op for an empty `chunks` list.
+- `search(query_embedding: list[float], n_results: int = 5) -> list[Chunk]`
+  returns the `n_results` chunks nearest the query vector, most similar
+  first, reconstructed from their stored content and metadata.
+- `delete_collection() -> None` drops every vector in the collection — call
+  it before re-indexing a repository. A no-op if the collection doesn't
+  exist yet.
+- `collection_exists() -> bool` reports whether the collection exists *and*
+  holds at least one document.
 
 ## Error Handling
 

@@ -31,6 +31,7 @@ repos:
           - pytest-asyncio
           - httpx
           - voyageai>=0.5.0
+          - chromadb>=1.5.9
 
   - repo: https://github.com/pycqa/bandit
     rev: 1.9.4
