@@ -17,11 +17,12 @@ app/
 │   └── review.py         # System prompts + STRUCTURED_REVIEW_TOOL schema for CodeReviewer
 ├── services/
 │   ├── reviewer.py        # CodeReviewer class — all AI logic lives here
-│   ├── github.py          # GitHubService — OAuth token exchange, PR URL parsing, diff fetch
+│   ├── github.py          # GitHubService — OAuth token exchange, PR URL parsing, diff fetch, repo file fetch
 │   ├── github_errors.py   # GitHub-specific error translation (raise_for_github_response, is_rate_limited)
 │   ├── chunker.py         # CodeChunker + Chunk — splits source files into chunks for the RAG pipeline
 │   ├── embedder.py        # Embedder — turns Chunks into vectors via Voyage AI
-│   └── vector_store.py    # VectorStore — persists and searches chunk embeddings via Chroma
+│   ├── vector_store.py    # VectorStore — persists and searches chunk embeddings via Chroma
+│   └── indexer.py         # RepoIndexer + IndexingResult — orchestrates fetch → chunk → embed → store
 └── routes/
     ├── __init__.py
     ├── review.py       # /review/stream, /review/structured
@@ -171,6 +172,33 @@ collection per repository.
   exist yet.
 - `collection_exists() -> bool` reports whether the collection exists *and*
   holds at least one document.
+
+### Fetching repository files
+
+`GitHubService.fetch_repo_files(repo_url: str, token: str) -> list[tuple[str, str]]`
+(`app/services/github.py`) is the fetch stage's entry point. It walks the
+repo's default-branch file tree via the GitHub API, keeps only files whose
+extension is in `SUPPORTED_CODE_EXTENSIONS` (`app/constants.py`), and returns
+each as a `(file_path, content)` tuple, decoded as UTF-8 — binary files that
+fail to decode are silently skipped. Raises `InvalidRepoUrlError` for a
+malformed `repo_url`, `RepoNotFoundError` for a 404, and the usual
+`GitHubAuthError` / `GitHubRateLimitError` / `GitHubError` translation shared
+with the rest of `GitHubService`, via `raise_for_github_response`.
+
+### Orchestration
+
+`RepoIndexer` (`app/services/indexer.py`) wires the four stages together.
+Its constructor takes `github_service`, `chunker`, `embedder`, and
+`vector_store` as explicit dependencies (no defaults — callers assemble the
+pipeline). `index_repository(repo_url: str, github_token: str) ->
+IndexingResult` runs fetch → chunk → embed → store in sequence, logging
+progress at each step, and returns an `IndexingResult` (`repo_url`,
+`files_processed`, `chunks_created`, `chunks_stored`, `duration_seconds`).
+Files over `MAX_INDEXABLE_FILE_LINES` (`app/constants.py`, 500) are skipped
+before chunking — too large to be a useful, focused piece of retrieval
+context. Each file's language is looked up from its extension via
+`EXTENSION_TO_LANGUAGE` (`app/constants.py`), which `GitHubService` and
+`RepoIndexer` both key off so the two stages agree on what "supported" means.
 
 ## Error Handling
 
