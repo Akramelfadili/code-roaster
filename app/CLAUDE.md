@@ -199,6 +199,11 @@ before chunking — too large to be a useful, focused piece of retrieval
 context. Each file's language is looked up from its extension via
 `EXTENSION_TO_LANGUAGE` (`app/constants.py`), which `GitHubService` and
 `RepoIndexer` both key off so the two stages agree on what "supported" means.
+`GitHubService` already filters to `SUPPORTED_CODE_EXTENSIONS` before
+returning files, but `RepoIndexer` doesn't trust that as a precondition — any
+file whose extension isn't in `EXTENSION_TO_LANGUAGE` is skipped defensively
+rather than looked up, so a gap between the two filters fails soft, not with
+a `KeyError`.
 
 ## Error Handling
 

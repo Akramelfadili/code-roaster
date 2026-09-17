@@ -98,7 +98,7 @@ class RepoIndexer:
         )
 
     def _chunk_files(self, files: list[tuple[str, str]]) -> list[Chunk]:
-        """Chunk each file, skipping any over `MAX_INDEXABLE_FILE_LINES` lines."""
+        """Chunk each file, skipping oversized or unsupported-extension ones."""
         chunks: list[Chunk] = []
         for file_path, content in files:
             if len(content.splitlines()) > MAX_INDEXABLE_FILE_LINES:
@@ -106,6 +106,9 @@ class RepoIndexer:
                     f"Skipping {file_path}: exceeds {MAX_INDEXABLE_FILE_LINES} lines"
                 )
                 continue
-            language = EXTENSION_TO_LANGUAGE[PurePosixPath(file_path).suffix]
+            language = EXTENSION_TO_LANGUAGE.get(PurePosixPath(file_path).suffix)
+            if language is None:
+                logger.info(f"Skipping {file_path}: unsupported extension")
+                continue
             chunks.extend(self._chunker.chunk_file(file_path, content, language))
         return chunks
