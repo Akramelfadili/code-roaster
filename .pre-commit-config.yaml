@@ -22,7 +22,7 @@ repos:
         pass_filenames: false
         args: [app/]
         additional_dependencies:
-          - anthropic
+          - anthropic<1.0
           - fastapi
           - pydantic>=2.0
           - pydantic-settings>=2.0
@@ -30,6 +30,8 @@ repos:
           - pytest
           - pytest-asyncio
           - httpx
+          - voyageai>=0.5.0
+          - chromadb>=1.5.9
 
   - repo: https://github.com/pycqa/bandit
     rev: 1.9.4
