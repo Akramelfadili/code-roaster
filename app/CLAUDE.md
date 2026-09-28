@@ -17,8 +17,12 @@ app/
 │   └── review.py         # System prompts + STRUCTURED_REVIEW_TOOL schema for CodeReviewer
 ├── services/
 │   ├── reviewer.py        # CodeReviewer class — all AI logic lives here
-│   ├── github.py          # GitHubService — OAuth token exchange, PR URL parsing, diff fetch
-│   └── github_errors.py   # GitHub-specific error translation (raise_for_github_response, is_rate_limited)
+│   ├── github.py          # GitHubService — OAuth token exchange, PR URL parsing, diff fetch, repo file fetch
+│   ├── github_errors.py   # GitHub-specific error translation (raise_for_github_response, is_rate_limited)
+│   ├── chunker.py         # CodeChunker + Chunk — splits source files into chunks for the RAG pipeline
+│   ├── embedder.py        # Embedder — turns Chunks into vectors via Voyage AI
+│   ├── vector_store.py    # VectorStore — persists and searches chunk embeddings via Chroma
+│   └── indexer.py         # RepoIndexer + IndexingResult — orchestrates fetch → chunk → embed → store
 └── routes/
     ├── __init__.py
     ├── review.py       # /review/stream, /review/structured
@@ -67,6 +71,139 @@ main.py              # App setup, lifespan, logging config, and the exception ha
 - Streaming for text responses, `create()` for structured output
 - Handle `RateLimitError` and `APIError` explicitly
 - Log token usage on every call
+
+## RAG Pipeline
+
+The codebase-indexing feature embeds a repository's source and retrieves relevant
+context at review time. Its stages (chunk → embed → store → retrieve) all pass the
+same unit around.
+
+### `Chunk` — the standard data structure
+
+`Chunk` (`app/services/chunker.py`) is a frozen, slotted dataclass and the one
+type every RAG stage exchanges. Do not introduce a parallel "code fragment" /
+"snippet" type — extend `Chunk`, or wrap it, instead.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `content` | `str` | The slice's source text, newline-joined |
+| `file_path` | `str` | Path of the source file, exactly as passed to `chunk_file` (never re-read from disk) |
+| `start_line` | `int` | 1-indexed first line, inclusive |
+| `end_line` | `int` | 1-indexed last line, inclusive |
+| `language` | `str` | Canonical language name — one of `CodeChunker.SUPPORTED_LANGUAGES` |
+
+### Chunking strategy
+
+`CodeChunker.chunk_file(file_path, content, language)` returns `list[Chunk]` in
+source order, applying, per file:
+
+1. **Definition-aligned split (preferred).** Lines are cut into segments at each
+   `function`/`class`-style definition for the language (regex-based, one pattern
+   per language). Lines before the first definition (imports, `package`/`use`
+   declarations) form a leading segment. Adjacent segments are then merged while
+   the combined span stays within the **max chunk size (100 lines)**, so small
+   helpers group together and large ones stand alone.
+2. **Fixed-size fallback.** Any single definition longer than 100 lines, and any
+   file whose language exposes no recognisable definitions, is windowed into
+   **50-line chunks overlapping by 10 lines**.
+3. **Minimum size.** Chunks shorter than **5 lines** are dropped. A blank file,
+   or one that yields only sub-5-line fragments, produces `[]`.
+
+Supported languages (case-insensitive, common aliases like `ts`/`golang`
+resolved): **Python, TypeScript, JavaScript, Go, Rust, Java**. An unsupported
+language raises `ValueError` — it's a caller contract violation, not a modelled
+domain failure, so it is not an `AppError` subclass.
+
+Size thresholds default from module constants but are constructor-overridable
+(`CodeChunker(max_chunk_lines=..., fixed_chunk_size_lines=..., ...)`) for tests
+and tuning.
+
+### Embedding
+
+`Embedder` (`app/services/embedder.py`) is the chunk → vector stage. It wraps
+Voyage AI's async client (`voyageai.AsyncClient`, keyed with `voyage_api_key`
+from `Settings`) and the `voyage-code-3` model — Voyage AI's strongest
+code-embedding model.
+
+- `embed_chunks(chunks: list[Chunk]) -> list[list[float]]` embeds each chunk's
+  `content` as a `document` vector, one per chunk, in input order. Requests are
+  batched at **128 inputs** (Voyage AI's per-request limit); an empty list makes
+  no API call.
+- `embed_query(query: str) -> list[float]` embeds a single search string as a
+  `query` vector for retrieval time. Documents and queries are embedded with
+  their matching `input_type` so they share one vector space.
+- Both methods are `async` (the rest of the app is async, and the underlying
+  `voyageai.AsyncClient.embed` is a coroutine).
+- Voyage AI failures are translated in one place (`Embedder._embed`):
+  `voyageai.error.RateLimitError` → `AIProviderRateLimitError`, any other
+  `voyageai.error.VoyageError` → `AIProviderError`. Token usage is logged on
+  every call.
+- The constructor takes an optional `client` so tests inject a fake instead of
+  hitting the API. Model name, batch size, and the `input_type` values are
+  module-local constants, not in `app/constants.py` (nothing else refers to
+  them — same rationale as the chunker's thresholds).
+
+### Vector storage
+
+`VectorStore` (`app/services/vector_store.py`) is the store/retrieve stage —
+it wraps a persistent Chroma collection (`chromadb.PersistentClient`), one
+collection per repository.
+
+- The constructor takes `collection_name: str` (callers scope this per
+  repository so chunks from different repos never mix) and
+  `persist_directory: str`, defaulting to `data/chroma` at the project root
+  (relative to the process's working directory, which is the project root
+  for every `make`/`uvicorn` entry point). `data/chroma` is gitignored —
+  it's local, rebuildable index data, not source.
+- `add_chunks(chunks: list[Chunk], embeddings: list[list[float]]) -> None`
+  upserts each chunk's vector, source text, and metadata
+  (`file_path`, `start_line`, `end_line`, `language`) under a deterministic
+  ID, `{file_path}:{start_line}:{end_line}`. Re-adding the same file range
+  overwrites the existing record instead of duplicating it, so re-indexing is
+  idempotent. Raises `ValueError` if `chunks` and `embeddings` differ in
+  length — a caller contract violation, not a modelled domain failure, so it
+  is not an `AppError` subclass (same rationale as the chunker's unsupported
+  language check). A no-op for an empty `chunks` list.
+- `search(query_embedding: list[float], n_results: int = 5) -> list[Chunk]`
+  returns the `n_results` chunks nearest the query vector, most similar
+  first, reconstructed from their stored content and metadata.
+- `delete_collection() -> None` drops every vector in the collection — call
+  it before re-indexing a repository. A no-op if the collection doesn't
+  exist yet.
+- `collection_exists() -> bool` reports whether the collection exists *and*
+  holds at least one document.
+
+### Fetching repository files
+
+`GitHubService.fetch_repo_files(repo_url: str, token: str) -> list[tuple[str, str]]`
+(`app/services/github.py`) is the fetch stage's entry point. It walks the
+repo's default-branch file tree via the GitHub API, keeps only files whose
+extension is in `SUPPORTED_CODE_EXTENSIONS` (`app/constants.py`), and returns
+each as a `(file_path, content)` tuple, decoded as UTF-8 — binary files that
+fail to decode are silently skipped. Raises `InvalidRepoUrlError` for a
+malformed `repo_url`, `RepoNotFoundError` for a 404, and the usual
+`GitHubAuthError` / `GitHubRateLimitError` / `GitHubError` translation shared
+with the rest of `GitHubService`, via `raise_for_github_response`.
+
+### Orchestration
+
+`RepoIndexer` (`app/services/indexer.py`) wires the four stages together.
+Its constructor takes `github_service`, `chunker`, `embedder`, and
+`vector_store` as explicit dependencies (no defaults — callers assemble the
+pipeline). `index_repository(repo_url: str, github_token: str) ->
+IndexingResult` runs fetch → chunk → embed → store in sequence, logging
+progress at each step, and returns an `IndexingResult` (`repo_url`,
+`files_processed`, `chunks_created`, `chunks_stored`, `duration_seconds`).
+Files over `MAX_INDEXABLE_FILE_LINES` (`app/constants.py`, 500) are skipped
+before chunking — too large to be a useful, focused piece of retrieval
+context. Each file's language is looked up from its extension via
+`EXTENSION_TO_LANGUAGE` (`app/constants.py`), which `GitHubService` and
+`RepoIndexer` both key off so the two stages agree on what "supported" means.
+`GitHubService` already filters to `SUPPORTED_CODE_EXTENSIONS` before
+returning files, but `RepoIndexer` doesn't trust that as a precondition — any
+file whose extension isn't in `EXTENSION_TO_LANGUAGE` is skipped defensively
+rather than looked up, so a gap between the two filters fails soft, not with
+a `KeyError`.
 
 ## Error Handling
 

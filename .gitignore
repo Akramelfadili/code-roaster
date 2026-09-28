@@ -13,3 +13,4 @@ build/
 htmlcov/
 coverage.xml
 .claude
+data/chroma

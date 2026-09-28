@@ -77,6 +77,18 @@ class PRNotFoundError(GitHubError):
     user_message = None
 
 
+class InvalidRepoUrlError(GitHubError):
+    status_code = 400
+    log_level = logging.WARNING
+    user_message = None
+
+
+class RepoNotFoundError(GitHubError):
+    status_code = 404
+    log_level = logging.WARNING
+    user_message = None
+
+
 class GitHubRateLimitError(GitHubError):
     status_code = 429
     log_level = logging.WARNING
