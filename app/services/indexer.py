@@ -8,10 +8,15 @@ the result in `VectorStore`.
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from app.constants import EXTENSION_TO_LANGUAGE, MAX_INDEXABLE_FILE_LINES
+from app.constants import (
+    EXTENSION_TO_LANGUAGE,
+    MAX_INDEXABLE_FILE_LINES,
+    IndexingStage,
+)
 from app.services.chunker import Chunk, CodeChunker
 from app.services.embedder import Embedder
 from app.services.github import GitHubService
@@ -47,7 +52,7 @@ class RepoIndexer:
         github_service: GitHubService,
         chunker: CodeChunker,
         embedder: Embedder,
-        vector_store: VectorStore,
+        vector_store_factory: Callable[[str], VectorStore],
     ) -> None:
         """Wire the indexer to its pipeline collaborators.
 
@@ -55,38 +60,51 @@ class RepoIndexer:
             github_service: Fetches a repository's supported source files.
             chunker: Splits each file's content into `Chunk`s.
             embedder: Turns chunks into embedding vectors.
-            vector_store: Persists chunks and their embeddings.
+            vector_store_factory: Builds the `VectorStore` for a collection
+                name, so one indexer can serve many repositories, each in
+                its own collection.
         """
         self._github_service = github_service
         self._chunker = chunker
         self._embedder = embedder
-        self._vector_store = vector_store
+        self._vector_store_factory = vector_store_factory
 
     async def index_repository(
-        self, repo_url: str, github_token: str
+        self,
+        repo_url: str,
+        github_token: str,
+        collection_name: str,
+        on_stage: Callable[[IndexingStage], None] | None = None,
     ) -> IndexingResult:
         """Fetch, chunk, embed, and store a repository's supported source files.
 
         Args:
             repo_url: HTTPS URL of the repository to index.
             github_token: GitHub access token used to fetch its files.
+            collection_name: Vector store collection to store the chunks in.
+            on_stage: Called as each pipeline stage starts, to report progress.
 
         Returns:
             Summary counts and timing for the run.
         """
+        report_stage = on_stage or (lambda _stage: None)
         start_time = time.monotonic()
         logger.info(f"Starting indexing for {repo_url}")
 
+        report_stage(IndexingStage.FETCHING)
         files = await self._github_service.fetch_repo_files(repo_url, github_token)
         logger.info(f"Fetched {len(files)} source files from {repo_url}")
 
+        report_stage(IndexingStage.CHUNKING)
         chunks = self._chunk_files(files)
         logger.info(f"Created {len(chunks)} chunks from {len(files)} files")
 
+        report_stage(IndexingStage.EMBEDDING)
         embeddings = await self._embedder.embed_chunks(chunks)
         logger.info(f"Embedded {len(embeddings)} chunks")
 
-        self._vector_store.add_chunks(chunks, embeddings)
+        report_stage(IndexingStage.STORING)
+        self._vector_store_factory(collection_name).add_chunks(chunks, embeddings)
         logger.info(f"Stored {len(chunks)} chunks for {repo_url}")
 
         return IndexingResult(

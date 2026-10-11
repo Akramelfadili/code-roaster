@@ -8,13 +8,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
+from app.constants import INTERNAL_SERVER_ERROR_MESSAGE
 from app.exceptions import AppError
+from app.models import IndexingJobStatus
 from app.routes.auth import router as auth_router
 from app.routes.health import router as health_router
+from app.routes.index import router as index_router
 from app.routes.pr import router as pr_router
 from app.routes.review import router as review_router
+from app.services.chunker import CodeChunker
+from app.services.embedder import Embedder
 from app.services.github import GitHubService
+from app.services.indexer import RepoIndexer
 from app.services.reviewer import CodeReviewer
+from app.services.vector_store import VectorStore
 
 load_dotenv()
 
@@ -31,6 +38,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         client_id=settings.github_client_id,
         client_secret=settings.github_client_secret,
     )
+    app.state.indexer = RepoIndexer(
+        github_service=app.state.github_service,
+        chunker=CodeChunker(),
+        embedder=Embedder(),
+        vector_store_factory=VectorStore,
+    )
+    indexing_jobs: dict[str, IndexingJobStatus] = {}
+    app.state.indexing_jobs = indexing_jobs
     yield
 
 
@@ -68,8 +83,9 @@ async def app_error_handler(req: Request, exc: AppError) -> JSONResponse:
     logger.log(
         exc.log_level, message, exc_info=exc if exc.log_level >= logging.ERROR else None
     )
-    detail = exc.user_message if exc.user_message is not None else str(exc)
-    return JSONResponse(status_code=exc.status_code, content={"detail": detail})
+    return JSONResponse(
+        status_code=exc.status_code, content={"detail": exc.client_message}
+    )
 
 
 @app.exception_handler(Exception)
@@ -92,10 +108,13 @@ async def unhandled_exception_handler(req: Request, exc: Exception) -> JSONRespo
         exc,
         exc_info=exc,
     )
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    return JSONResponse(
+        status_code=500, content={"detail": INTERNAL_SERVER_ERROR_MESSAGE}
+    )
 
 
 app.include_router(review_router)
 app.include_router(auth_router)
 app.include_router(pr_router)
 app.include_router(health_router)
+app.include_router(index_router)

@@ -33,6 +33,11 @@ class AppError(Exception):
         super().__init__(message)
         self.debug_context = debug_context
 
+    @property
+    def client_message(self) -> str:
+        """The message safe to show the client: `user_message`, else our own."""
+        return self.user_message if self.user_message is not None else str(self)
+
 
 class ReviewError(AppError):
     status_code = 500
@@ -93,3 +98,17 @@ class GitHubRateLimitError(GitHubError):
     status_code = 429
     log_level = logging.WARNING
     user_message = None
+
+
+class IndexingError(AppError):
+    status_code = 500
+
+
+class IndexingJobNotFoundError(IndexingError):
+    status_code = 404
+    log_level = logging.WARNING
+
+
+class IndexingAlreadyInProgressError(IndexingError):
+    status_code = 409
+    log_level = logging.WARNING

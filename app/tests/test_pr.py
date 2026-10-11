@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 from httpx import AsyncClient
 
 from app.exceptions import GitHubAuthError, InvalidPRUrlError, PRNotFoundError
-from app.tests.mocks import SAMPLE_PR_URL
+from app.tests.mocks import SAMPLE_PR_DIFF, SAMPLE_PR_URL, SAMPLE_REPO_ID
 
 
 class TestReviewPr:
@@ -27,6 +27,34 @@ class TestReviewPr:
             "positives",
         ):
             assert field in data
+
+    async def test_repo_id_uses_context_aware_review(
+        self, client: AsyncClient, mock_reviewer: MagicMock
+    ) -> None:
+        response = await client.post(
+            "/review/pr",
+            json={
+                "pr_url": SAMPLE_PR_URL,
+                "github_token": "gh-token",
+                "repo_id": SAMPLE_REPO_ID,
+            },
+        )
+        assert response.status_code == 200
+        mock_reviewer.review_pr_with_context.assert_awaited_once_with(
+            SAMPLE_PR_DIFF, SAMPLE_REPO_ID, "octocat/hello-world#42"
+        )
+        mock_reviewer.review_pr_diff.assert_not_awaited()
+
+    async def test_no_repo_id_uses_plain_diff_review(
+        self, client: AsyncClient, mock_reviewer: MagicMock
+    ) -> None:
+        response = await client.post(
+            "/review/pr",
+            json={"pr_url": SAMPLE_PR_URL, "github_token": "gh-token"},
+        )
+        assert response.status_code == 200
+        mock_reviewer.review_pr_diff.assert_awaited_once()
+        mock_reviewer.review_pr_with_context.assert_not_awaited()
 
     async def test_empty_pr_url_returns_422(self, client: AsyncClient) -> None:
         response = await client.post(

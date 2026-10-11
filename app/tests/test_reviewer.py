@@ -11,8 +11,11 @@ from app.exceptions import (
     AIProviderRateLimitError,
     MalformedAIResponseError,
 )
+from app.services.chunker import Chunk
+from app.services.embedder import Embedder
 from app.services.reviewer import CodeReviewer
-from app.tests.mocks import SAMPLE_CODE
+from app.services.vector_store import VectorStore
+from app.tests.mocks import SAMPLE_CHUNK, SAMPLE_CODE, SAMPLE_REPO_ID
 
 _ANTHROPIC_REQUEST = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
 _SAMPLE_TOOL_OUTPUT = {
@@ -148,6 +151,79 @@ class TestReviewPrDiff:
         sent_message = mock_client.messages.create.call_args.kwargs["messages"][0]
         assert "octocat/hello-world#42" in sent_message["content"]
         assert "diff --git a/f b/f" in sent_message["content"]
+
+
+class TestReviewPrWithContext:
+    _PR_LABEL = "octocat/hello-world#42"
+    _DIFF = "diff --git a/f b/f"
+
+    def _make_reviewer(
+        self, collection_exists: bool, chunks: list[Chunk]
+    ) -> tuple[CodeReviewer, MagicMock, MagicMock, MagicMock]:
+        mock_client = MagicMock()
+        tool_use_block = SimpleNamespace(type="tool_use", input=_SAMPLE_TOOL_OUTPUT)
+        mock_client.messages.create = AsyncMock(
+            return_value=_make_response([tool_use_block])
+        )
+        vector_store = MagicMock(spec=VectorStore)
+        vector_store.collection_exists.return_value = collection_exists
+        vector_store.search.return_value = chunks
+        vector_store_factory = MagicMock(return_value=vector_store)
+        embedder = MagicMock(spec=Embedder)
+        embedder.embed_query = AsyncMock(return_value=[0.1, 0.2])
+        reviewer = CodeReviewer(
+            client=mock_client,
+            embedder=embedder,
+            vector_store_factory=vector_store_factory,
+        )
+        return reviewer, mock_client, vector_store, embedder
+
+    async def test_injects_retrieved_chunks_before_diff(self) -> None:
+        reviewer, mock_client, vector_store, embedder = self._make_reviewer(
+            collection_exists=True, chunks=[SAMPLE_CHUNK]
+        )
+
+        await reviewer.review_pr_with_context(
+            self._DIFF, SAMPLE_REPO_ID, self._PR_LABEL
+        )
+
+        embedder.embed_query.assert_awaited_once_with(self._DIFF)
+        vector_store.search.assert_called_once_with([0.1, 0.2], 5)
+        reviewer.vector_store_factory.assert_called_once_with(SAMPLE_REPO_ID)  # type: ignore[attr-defined]
+        content = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "File: app/helpers.py (lines 10-11)" in content
+        assert SAMPLE_CHUNK.content in content
+        assert content.index(SAMPLE_CHUNK.content) < content.index(self._DIFF)
+        assert self._PR_LABEL in content
+
+    async def test_missing_index_falls_back_to_plain_diff_review(self) -> None:
+        reviewer, mock_client, vector_store, embedder = self._make_reviewer(
+            collection_exists=False, chunks=[SAMPLE_CHUNK]
+        )
+
+        await reviewer.review_pr_with_context(
+            self._DIFF, SAMPLE_REPO_ID, self._PR_LABEL
+        )
+
+        embedder.embed_query.assert_not_awaited()
+        vector_store.search.assert_not_called()
+        content = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert self._DIFF in content
+        assert "Relevant context" not in content
+
+    async def test_empty_search_results_fall_back_to_plain_diff_review(self) -> None:
+        reviewer, mock_client, vector_store, _ = self._make_reviewer(
+            collection_exists=True, chunks=[]
+        )
+
+        await reviewer.review_pr_with_context(
+            self._DIFF, SAMPLE_REPO_ID, self._PR_LABEL
+        )
+
+        vector_store.search.assert_called_once()
+        content = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert self._DIFF in content
+        assert "Relevant context" not in content
 
 
 class TestReviewStream:

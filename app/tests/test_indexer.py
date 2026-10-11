@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.constants import IndexingStage
 from app.exceptions import RepoNotFoundError
 from app.services.chunker import Chunk, CodeChunker
 from app.services.embedder import Embedder
@@ -28,7 +29,10 @@ def _make_indexer(
     mock_embedder = MagicMock(spec=Embedder)
     mock_embedder.embed_chunks = AsyncMock(return_value=[[0.1, 0.2]])
     mock_vector_store = MagicMock(spec=VectorStore)
-    indexer = RepoIndexer(mock_github, mock_chunker, mock_embedder, mock_vector_store)
+    mock_vector_store_factory = MagicMock(return_value=mock_vector_store)
+    indexer = RepoIndexer(
+        mock_github, mock_chunker, mock_embedder, mock_vector_store_factory
+    )
     return indexer, mock_github, mock_chunker, mock_embedder, mock_vector_store
 
 
@@ -38,7 +42,9 @@ class TestIndexRepository:
             [("a.py", "def foo():\n    return 1\n")]
         )
 
-        result = await indexer.index_repository("https://github.com/o/r", "token")
+        result = await indexer.index_repository(
+            "https://github.com/o/r", "token", "o__r"
+        )
 
         assert result.repo_url == "https://github.com/o/r"
         assert result.files_processed == 1
@@ -60,7 +66,9 @@ class TestIndexRepository:
             [("big.py", big_content), ("small.py", small_content)]
         )
 
-        result = await indexer.index_repository("https://github.com/o/r", "token")
+        result = await indexer.index_repository(
+            "https://github.com/o/r", "token", "o__r"
+        )
 
         assert result.files_processed == 2
         assert result.chunks_created == 1
@@ -75,7 +83,9 @@ class TestIndexRepository:
             [("README.md", readme_content), ("a.py", source_content)]
         )
 
-        result = await indexer.index_repository("https://github.com/o/r", "token")
+        result = await indexer.index_repository(
+            "https://github.com/o/r", "token", "o__r"
+        )
 
         assert result.files_processed == 2
         assert result.chunks_created == 1
@@ -90,4 +100,21 @@ class TestIndexRepository:
         )
 
         with pytest.raises(RepoNotFoundError):
-            await indexer.index_repository("https://github.com/o/missing", "token")
+            await indexer.index_repository(
+                "https://github.com/o/missing", "token", "o__missing"
+            )
+
+    async def test_reports_each_stage_in_order(self) -> None:
+        indexer, _, _, _, _ = _make_indexer([("a.py", "def foo():\n    return 1\n")])
+        reported_stages: list[IndexingStage] = []
+
+        await indexer.index_repository(
+            "https://github.com/o/r", "token", "o__r", on_stage=reported_stages.append
+        )
+
+        assert reported_stages == [
+            IndexingStage.FETCHING,
+            IndexingStage.CHUNKING,
+            IndexingStage.EMBEDDING,
+            IndexingStage.STORING,
+        ]

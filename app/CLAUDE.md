@@ -12,22 +12,25 @@ app/
 ├── exceptions.py       # AppError base + all domain exceptions — see "Error Handling"
 ├── models/
 │   ├── review.py        # Review request/response models
-│   └── pr.py             # PullRequestRef, PR review request models
+│   ├── pr.py             # PullRequestRef, PR review request models
+│   └── index.py          # IndexRepoRequest, IndexingJobStatus, IndexingSummary
 ├── prompts/
 │   └── review.py         # System prompts + STRUCTURED_REVIEW_TOOL schema for CodeReviewer
 ├── services/
-│   ├── reviewer.py        # CodeReviewer class — all AI logic lives here
+│   ├── reviewer.py        # CodeReviewer class — all AI logic lives here, incl. RAG-augmented PR review
 │   ├── github.py          # GitHubService — OAuth token exchange, PR URL parsing, diff fetch, repo file fetch
 │   ├── github_errors.py   # GitHub-specific error translation (raise_for_github_response, is_rate_limited)
 │   ├── chunker.py         # CodeChunker + Chunk — splits source files into chunks for the RAG pipeline
 │   ├── embedder.py        # Embedder — turns Chunks into vectors via Voyage AI
 │   ├── vector_store.py    # VectorStore — persists and searches chunk embeddings via Chroma
-│   └── indexer.py         # RepoIndexer + IndexingResult — orchestrates fetch → chunk → embed → store
+│   ├── indexer.py         # RepoIndexer + IndexingResult — orchestrates fetch → chunk → embed → store
+│   └── indexing_jobs.py   # run_indexing_job — background wrapper that records a job's progress/outcome
 └── routes/
     ├── __init__.py
     ├── review.py       # /review/stream, /review/structured
     ├── auth.py         # /auth/github, /auth/github/callback — GitHub OAuth
     ├── pr.py           # /review/pr — PR diff review
+    ├── index.py        # /index/repo, /index/status/{repo_id} — background repo indexing
     └── health.py       # /health
 main.py              # App setup, lifespan, logging config, and the exception handlers
 ```
@@ -189,10 +192,14 @@ with the rest of `GitHubService`, via `raise_for_github_response`.
 
 `RepoIndexer` (`app/services/indexer.py`) wires the four stages together.
 Its constructor takes `github_service`, `chunker`, `embedder`, and
-`vector_store` as explicit dependencies (no defaults — callers assemble the
-pipeline). `index_repository(repo_url: str, github_token: str) ->
-IndexingResult` runs fetch → chunk → embed → store in sequence, logging
-progress at each step, and returns an `IndexingResult` (`repo_url`,
+`vector_store_factory: Callable[[str], VectorStore]` as explicit dependencies
+(no defaults — callers assemble the pipeline). It takes a factory rather than
+a `VectorStore` because a store is bound to one collection, and the single
+app-wide indexer (built in `main.py`'s lifespan with `VectorStore` itself as
+the factory) serves every repository. `index_repository(repo_url,
+github_token, collection_name, on_stage=None) -> IndexingResult` runs fetch →
+chunk → embed → store in sequence, calling `on_stage` with each
+`IndexingStage` (`app/constants.py`) as it starts and logging progress, and returns an `IndexingResult` (`repo_url`,
 `files_processed`, `chunks_created`, `chunks_stored`, `duration_seconds`).
 Files over `MAX_INDEXABLE_FILE_LINES` (`app/constants.py`, 500) are skipped
 before chunking — too large to be a useful, focused piece of retrieval
@@ -204,6 +211,56 @@ returning files, but `RepoIndexer` doesn't trust that as a precondition — any
 file whose extension isn't in `EXTENSION_TO_LANGUAGE` is skipped defensively
 rather than looked up, so a gap between the two filters fails soft, not with
 a `KeyError`.
+
+### Indexing jobs (`/index` routes)
+
+`POST /index/repo` (`app/routes/index.py`) parses the repo URL, derives a
+**repo ID** — `{owner}__{repo}` lowercased (`REPO_ID_SEPARATOR`), since GitHub
+names are case-insensitive — and returns **202** with the job's initial
+`IndexingJobStatus` while `run_indexing_job` (`app/services/indexing_jobs.py`)
+runs via FastAPI `BackgroundTasks`. The repo ID is both the job's key and the
+repo's Chroma collection name. `GET /index/status/{repo_id}` returns the
+latest status, or 404 (`IndexingJobNotFoundError`).
+
+- Jobs live in memory in `app.state.indexing_jobs: dict[str, IndexingJobStatus]`,
+  created in the lifespan. They're lost on restart (the Chroma index isn't),
+  and aren't shared between worker processes — run a single worker.
+- One job per repo at a time: re-indexing while a job is `pending`/`running`
+  returns 409 (`IndexingAlreadyInProgressError`). A `completed`/`failed` job is
+  replaced.
+- `IndexingJobStatus` fields: `state` (`pending` → `running` → `completed` |
+  `failed`), `stage` (current `IndexingStage`; cleared on success, kept on
+  failure to show where it stopped), `summary` (counts/timing, on success),
+  `error` (client-safe message, on failure). The GitHub token is never stored.
+- `run_indexing_job` is the second exception to "services never catch or log"
+  (see Error Handling): the 202 has already been sent, so it catches every
+  failure, logs it, and records `AppError.client_message` (or the generic
+  `INTERNAL_SERVER_ERROR_MESSAGE` for unmodeled exceptions) on the job.
+
+### Retrieval-augmented PR review
+
+`CodeReviewer.review_pr_with_context(diff, repo_id, pr_label) -> StructuredReview`
+(`app/services/reviewer.py`) is the retrieve stage's consumer. `repo_id` is the
+same `{owner}__{repo}` ID used as the Chroma collection name by `/index/repo`.
+
+- The constructor takes optional `embedder` (default `Embedder()`) and
+  `vector_store_factory: Callable[[str], VectorStore]` (default `VectorStore`)
+  so tests inject fakes.
+- Flow: build the store for `repo_id` → if `collection_exists()` is `False`,
+  fall back to `review_pr_diff(pr_label, diff)` → `embed_query(diff)` →
+  `search(query_vector, n_results=5)` → if no chunks come back, fall back
+  likewise → otherwise review with context. The sync Chroma calls run via
+  `asyncio.to_thread`.
+- Context injection: each chunk is rendered as
+  `File: {file_path} (lines {start_line}-{end_line})` followed by its code in a
+  fenced block tagged with the chunk's language. These blocks come first under
+  "Relevant context from the existing codebase:", then the
+  `Pull request {pr_label}` diff, and the whole message goes through
+  `review_structured` (system prompt and tool schema unchanged).
+- `POST /review/pr` calls this method when the request's optional `repo_id` is
+  set, and `review_pr_diff` otherwise.
+- The whole diff is the query, so a diff beyond Voyage's input limit surfaces
+  as `AIProviderError`.
 
 ## Error Handling
 
@@ -221,7 +278,7 @@ a `KeyError`.
 
 - `main.py` calls `logging.basicConfig(...)` once at import time — without it, `logging.getLogger(__name__)` calls anywhere in the app print bare, unformatted messages (no level, no timestamp, no logger name) via Python's fallback handler. Don't remove it, and don't add a second `basicConfig` call elsewhere
 - Services translate *what went wrong* into the right exception type; `main.py` alone handles *logging and responding*. If you're tempted to add a `logger.error(...)` call inside a service or route, that's a sign the failure needs a new/adjusted `AppError` subclass instead
-- **Exception:** streaming endpoints (`CodeReviewer.review_stream`) log directly in the service before re-raising. Once response bytes have started flowing, `main.py`'s handler can no longer translate the failure into a clean JSON error, so the service logs with full context inline instead of relying on the central handler
+- **Exception:** streaming endpoints (`CodeReviewer.review_stream`) and background jobs (`run_indexing_job`) log directly in the service. For streaming, the service re-raises. Once response bytes have started flowing, `main.py`'s handler can no longer translate the failure into a clean JSON error, so the service logs with full context inline instead of relying on the central handler
 
 ## Cost Optimization
 - Cache system prompts with `cache_control: ephemeral`

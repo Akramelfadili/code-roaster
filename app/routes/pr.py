@@ -13,5 +13,9 @@ async def review_pr(request: PRReviewRequest, req: Request) -> StructuredReviewR
     diff = await github_service.fetch_pr_diff(pr, request.github_token)
     pr_label = f"{pr.owner}/{pr.repo}#{pr.number}"
 
-    result = await req.app.state.reviewer.review_pr_diff(pr_label, diff)
+    reviewer = req.app.state.reviewer
+    if request.repo_id:
+        result = await reviewer.review_pr_with_context(diff, request.repo_id, pr_label)
+    else:
+        result = await reviewer.review_pr_diff(pr_label, diff)
     return StructuredReviewResponse.from_domain(result)

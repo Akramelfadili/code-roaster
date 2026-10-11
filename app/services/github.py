@@ -137,7 +137,7 @@ class GitHubService:
             GitHubRateLimitError: If GitHub's rate limit is exhausted.
             GitHubError: On any other GitHub API failure.
         """
-        owner, repo = self._parse_repo_url(repo_url)
+        owner, repo = self.parse_repo_url(repo_url)
         headers = {
             "Authorization": f"Bearer {token}",
             "Accept": GITHUB_JSON_MEDIA_TYPE,
@@ -156,7 +156,7 @@ class GitHubService:
         except httpx.HTTPError as e:
             raise GitHubError("Failed to reach GitHub API") from e
 
-    def _parse_repo_url(self, repo_url: str) -> tuple[str, str]:
+    def parse_repo_url(self, repo_url: str) -> tuple[str, str]:
         """Extract owner and repo name from a GitHub repository URL."""
         match = _REPO_URL_PATTERN.match(repo_url.strip())
         if match is None:

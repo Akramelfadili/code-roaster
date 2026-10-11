@@ -1,5 +1,6 @@
+import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import cast
 
 import anthropic
@@ -19,10 +20,14 @@ from app.prompts.review import (
     STRUCTURED_REVIEW_TOOL,
     ReviewToolOutput,
 )
+from app.services.chunker import Chunk
+from app.services.embedder import Embedder
+from app.services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
 _AUTO_LANGUAGE = "auto"
+_RETRIEVED_CHUNK_COUNT = 5
 # STRUCTURED_REVIEW_TOOL marks bugs/security_issues/suggestions/positives as
 # required too, but Claude has been observed to omit them despite that, so
 # they're deliberately excluded here and defaulted via `.get(..., [])` below
@@ -30,6 +35,13 @@ _AUTO_LANGUAGE = "auto"
 # (needs a live test against the real API to see if that changes compliance,
 # rather than guessing) — see conversation from 2026-07-28.
 _REQUIRED_REVIEW_FIELDS = ("summary", "severity", "score", "detected_language")
+
+
+def _format_chunk(chunk: Chunk) -> str:
+    return (
+        f"File: {chunk.file_path} (lines {chunk.start_line}-{chunk.end_line})\n"
+        f"```{chunk.language}\n{chunk.content}\n```"
+    )
 
 
 def _require_review_fields(data: ReviewToolOutput) -> None:
@@ -41,11 +53,18 @@ def _require_review_fields(data: ReviewToolOutput) -> None:
 
 
 class CodeReviewer:
-    def __init__(self, client: anthropic.AsyncAnthropic | None = None) -> None:
+    def __init__(
+        self,
+        client: anthropic.AsyncAnthropic | None = None,
+        embedder: Embedder | None = None,
+        vector_store_factory: Callable[[str], VectorStore] = VectorStore,
+    ) -> None:
         self.client = client or anthropic.AsyncAnthropic(
             api_key=settings.anthropic_api_key
         )
         self.model = ANTHROPIC_MODEL
+        self.embedder = embedder or Embedder()
+        self.vector_store_factory = vector_store_factory
 
     def _build_review_message(self, code: str, language: str) -> str:
         if language == _AUTO_LANGUAGE:
@@ -109,6 +128,31 @@ class CodeReviewer:
     async def review_pr_diff(self, pr_label: str, diff: str) -> StructuredReview:
         """Review a GitHub PR's diff, labeled for context (e.g. "owner/repo#1")."""
         code_context = f"Pull request {pr_label}:\n\n```diff\n{diff}\n```"
+        return await self.review_structured(code=code_context, language="diff")
+
+    async def review_pr_with_context(
+        self, diff: str, repo_id: str, pr_label: str
+    ) -> StructuredReview:
+        """Review a PR diff augmented with the most relevant indexed codebase chunks.
+
+        Falls back to a plain `review_pr_diff` when the repo has no index.
+        """
+        vector_store = self.vector_store_factory(repo_id)
+        if not await asyncio.to_thread(vector_store.collection_exists):
+            return await self.review_pr_diff(pr_label, diff)
+
+        query_vector = await self.embedder.embed_query(diff)
+        chunks = await asyncio.to_thread(
+            vector_store.search, query_vector, _RETRIEVED_CHUNK_COUNT
+        )
+        if not chunks:
+            return await self.review_pr_diff(pr_label, diff)
+
+        context = "\n\n".join(_format_chunk(chunk) for chunk in chunks)
+        code_context = (
+            f"Relevant context from the existing codebase:\n\n{context}\n\n"
+            f"Pull request {pr_label}:\n\n```diff\n{diff}\n```"
+        )
         return await self.review_structured(code=code_context, language="diff")
 
     async def review_stream(
