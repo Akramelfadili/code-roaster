@@ -1,11 +1,12 @@
 import base64
+import logging
 import re
 from pathlib import PurePosixPath
 from typing import TypedDict, cast
 
 import httpx
 
-from app.constants import SUPPORTED_CODE_EXTENSIONS
+from app.constants import MAX_DIFF_CHARS, SUPPORTED_CODE_EXTENSIONS
 from app.exceptions import (
     GitHubAuthError,
     GitHubError,
@@ -16,6 +17,8 @@ from app.exceptions import (
 )
 from app.models.pr import PullRequestRef
 from app.services.github_errors import raise_for_github_response
+
+logger = logging.getLogger(__name__)
 
 GITHUB_API_BASE = "https://api.github.com"
 GITHUB_OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token"  # noqa: S105 # nosec B105
@@ -88,7 +91,11 @@ class GitHubService:
         return str(access_token)
 
     async def fetch_pr_diff(self, pr: PullRequestRef, token: str) -> str:
-        """Fetch the unified diff for a pull request from the GitHub API."""
+        """Fetch the unified diff for a pull request from the GitHub API.
+
+        Diffs longer than `MAX_DIFF_CHARS` are truncated (with a logged
+        warning) so a huge PR can't blow up the embedding and review calls.
+        """
         pr_label = f"{pr.owner}/{pr.repo}#{pr.number}"
         url = f"{GITHUB_API_BASE}/repos/{pr.owner}/{pr.repo}/pulls/{pr.number}"
         try:
@@ -108,7 +115,14 @@ class GitHubService:
         raise_for_github_response(
             f"GitHub PR diff fetch for {pr_label}", response, not_found=PRNotFoundError
         )
-        return response.text
+        diff = response.text
+        if len(diff) > MAX_DIFF_CHARS:
+            logger.warning(
+                f"Truncating diff for {pr_label} from {len(diff)} "
+                f"to {MAX_DIFF_CHARS} chars"
+            )
+            return diff[:MAX_DIFF_CHARS]
+        return diff
 
     async def fetch_repo_files(
         self, repo_url: str, token: str

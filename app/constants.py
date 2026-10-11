@@ -7,6 +7,25 @@ SEVERITY_VALUES: tuple[Severity, ...] = get_args(Severity)
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
 ANTHROPIC_MAX_TOKENS = 2048
 
+# USD per million tokens for ANTHROPIC_MODEL (claude-sonnet-4-6), used to log
+# an approximate cost per Claude call. Update together with ANTHROPIC_MODEL.
+ANTHROPIC_INPUT_COST_PER_MTOK_USD = 3.00
+ANTHROPIC_OUTPUT_COST_PER_MTOK_USD = 15.00
+ANTHROPIC_CACHE_WRITE_COST_PER_MTOK_USD = 3.75
+ANTHROPIC_CACHE_READ_COST_PER_MTOK_USD = 0.30
+TOKENS_PER_MTOK = 1_000_000
+
+# Input caps. Every LLM and embedding call is bounded by one of these, so no
+# single request can fill Claude's context window or run up an unbounded bill.
+# Request fields over their cap are rejected with a 422; content the server
+# fetches or builds itself (diffs, retrieved context, queries) is truncated.
+MAX_CODE_CHARS = 50_000
+MAX_LANGUAGE_CHARS = 500
+MAX_PR_URL_CHARS = 500
+MAX_DIFF_CHARS = 100_000
+MAX_CONTEXT_CHARS = 20_000
+MAX_QUERY_CHARS = 10_000
+
 # Maps each indexable source file extension to the canonical language name
 # CodeChunker expects. Shared by GitHubService (which files to fetch from a
 # repo) and RepoIndexer (which language to chunk a fetched file as).

@@ -118,7 +118,24 @@ app/
 - Streaming for text responses, `create()` with a tool schema for structured output
 - `cache_control: ephemeral` on every system prompt
 - Handle `RateLimitError` and `APIError` explicitly
-- Log input/output token usage on every call; never send more context than needed
+- Log token usage and approximate cost on every call through `_log_usage` in `reviewer.py`; never send more context than needed
+- Pricing constants (`ANTHROPIC_*_COST_PER_MTOK_USD`) are for `ANTHROPIC_MODEL`, so change them whenever the model changes
+
+## Input Caps & Cost Budget
+**Rule: no LLM or embedding call takes unbounded input.** Agents multiply calls per run, so an uncapped input can drain the API balance. Rationale: `ARCHITECTURE.md` §3.10. All caps live in `app/constants.py`.
+
+| Input | Cap | Enforced in | On overflow |
+|---|---|---|---|
+| `ReviewRequest.code` | `MAX_CODE_CHARS` = 50,000 | `Field(max_length=...)` | `422` |
+| `ReviewRequest.language` | `MAX_LANGUAGE_CHARS` = 500 | `Field(max_length=...)` | `422` |
+| `PRReviewRequest.pr_url` | `MAX_PR_URL_CHARS` = 500 | `Field(max_length=...)` | `422` |
+| PR diff | `MAX_DIFF_CHARS` = 100,000 | `GitHubService.fetch_pr_diff` | Truncated, WARNING logged |
+| Retrieved context | `MAX_CONTEXT_CHARS` = 20,000 | `_fit_context_budget` in `reviewer.py` | Lowest-ranked chunks dropped, WARNING logged |
+| Embedding query | `MAX_QUERY_CHARS` = 10,000 | `Embedder.embed_query` | Truncated, WARNING logged |
+
+- **Client input is rejected and server-built input is truncated.** A user can fix an oversized request field, so it gets a `422`. A diff, context or query the server fetches or builds is cut down so the review still runs. Truncation logs at WARNING (a documented exception to "services never log", like retrieval)
+- **A new LLM or embedding call path needs a cap before it ships.** Add the constant to `app/constants.py`, enforce it at the boundary (Pydantic field for client input, the service for fetched or built input), and add a row here
+- **Cost is logged, not yet enforced.** `settings.daily_cost_budget_usd` (env `DAILY_COST_BUDGET_USD`, default `10.0`) and `BudgetExceededError` (`429`) exist, but nothing sums spend or raises the error yet. When enforcement lands, the running total goes in Postgres, never in memory (see *Database*)
 
 ## Review Findings
 Every item in `bugs`, `security_issues`, `suggestions` and `positives` is a `Finding` (`app/models/review.py`) — never a plain string. Contract and rationale: `ARCHITECTURE.md` §3.7.

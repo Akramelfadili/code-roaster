@@ -54,6 +54,11 @@ class AIProviderRateLimitError(AIProviderError):
     user_message: str | None = None
 
 
+class BudgetExceededError(AppError):
+    status_code = 429
+    log_level = logging.WARNING
+
+
 class ReviewJobNotFoundError(ReviewError):
     status_code = 404
     log_level = logging.WARNING

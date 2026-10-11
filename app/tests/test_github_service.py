@@ -1,6 +1,7 @@
 import httpx
 import pytest
 
+from app.constants import MAX_DIFF_CHARS
 from app.exceptions import (
     GitHubAuthError,
     GitHubRateLimitError,
@@ -58,6 +59,17 @@ class TestFetchPrDiff:
         pr = PullRequestRef(owner="octocat", repo="hello-world", number=42)
         diff = await service.fetch_pr_diff(pr, "token")
         assert "diff --git" in diff
+
+    async def test_diff_over_max_length_is_truncated(self) -> None:
+        full_diff = "d" * (MAX_DIFF_CHARS + 1_000)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=full_diff)
+
+        service = _make_service(httpx.MockTransport(handler))
+        pr = PullRequestRef(owner="octocat", repo="hello-world", number=42)
+        diff = await service.fetch_pr_diff(pr, "token")
+        assert diff == full_diff[:MAX_DIFF_CHARS]
 
     async def test_unauthorized_raises_auth_error(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:

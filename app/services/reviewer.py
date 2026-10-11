@@ -4,10 +4,21 @@ from typing import cast
 
 import anthropic
 from anthropic import APIError
+from anthropic.types import Usage
 from pydantic import ValidationError
 
 from app.config import settings
-from app.constants import ANTHROPIC_MAX_TOKENS, ANTHROPIC_MODEL, ReviewStage
+from app.constants import (
+    ANTHROPIC_CACHE_READ_COST_PER_MTOK_USD,
+    ANTHROPIC_CACHE_WRITE_COST_PER_MTOK_USD,
+    ANTHROPIC_INPUT_COST_PER_MTOK_USD,
+    ANTHROPIC_MAX_TOKENS,
+    ANTHROPIC_MODEL,
+    ANTHROPIC_OUTPUT_COST_PER_MTOK_USD,
+    MAX_CONTEXT_CHARS,
+    TOKENS_PER_MTOK,
+    ReviewStage,
+)
 from app.exceptions import (
     AIProviderError,
     AIProviderRateLimitError,
@@ -37,6 +48,7 @@ _REQUIRED_REVIEW_FIELDS = ("summary", "severity", "score", "detected_language")
 # Finding fields the server always sets itself; dropped from tool input even if
 # Claude volunteers them, so they can never come from the model.
 _SERVER_SET_FINDING_FIELDS = frozenset({"id", "category"})
+_CONTEXT_CHUNK_SEPARATOR = "\n\n"
 
 
 async def _ignore_stage(_stage: ReviewStage) -> None:
@@ -47,6 +59,50 @@ def _format_chunk(chunk: Chunk) -> str:
     return (
         f"File: {chunk.file_path} (lines {chunk.start_line}-{chunk.end_line})\n"
         f"```{chunk.language}\n{chunk.content}\n```"
+    )
+
+
+def _fit_context_budget(chunks: list[Chunk]) -> list[Chunk]:
+    """Keep the highest-ranked chunks whose formatted context fits the budget.
+
+    `chunks` arrive most relevant first, so the lowest-ranked ones are dropped
+    first once the joined context would exceed `MAX_CONTEXT_CHARS`.
+    """
+    kept: list[Chunk] = []
+    context_chars = 0
+    for chunk in chunks:
+        separator_chars = len(_CONTEXT_CHUNK_SEPARATOR) if kept else 0
+        chunk_chars = len(_format_chunk(chunk)) + separator_chars
+        if context_chars + chunk_chars > MAX_CONTEXT_CHARS:
+            break
+        kept.append(chunk)
+        context_chars += chunk_chars
+    if len(kept) < len(chunks):
+        logger.warning(
+            f"Dropped {len(chunks) - len(kept)} of {len(chunks)} retrieved chunks "
+            f"to fit the {MAX_CONTEXT_CHARS}-char context budget"
+        )
+    return kept
+
+
+def _estimate_cost_usd(usage: Usage) -> float:
+    """Approximate a Claude call's cost in USD from its token usage."""
+    cache_write_tokens = usage.cache_creation_input_tokens or 0
+    cache_read_tokens = usage.cache_read_input_tokens or 0
+    cost_per_mtok = (
+        usage.input_tokens * ANTHROPIC_INPUT_COST_PER_MTOK_USD
+        + usage.output_tokens * ANTHROPIC_OUTPUT_COST_PER_MTOK_USD
+        + cache_write_tokens * ANTHROPIC_CACHE_WRITE_COST_PER_MTOK_USD
+        + cache_read_tokens * ANTHROPIC_CACHE_READ_COST_PER_MTOK_USD
+    )
+    return cost_per_mtok / TOKENS_PER_MTOK
+
+
+def _log_usage(call_type: str, usage: Usage) -> None:
+    """Log one Claude call's token usage and its approximate cost."""
+    logger.info(
+        f"Token usage — type={call_type} input={usage.input_tokens} "
+        f"output={usage.output_tokens} cost_usd={_estimate_cost_usd(usage):.4f}"
     )
 
 
@@ -164,10 +220,7 @@ class CodeReviewer:
         except APIError as e:
             raise AIProviderError("Anthropic API call failed") from e
 
-        logger.info(
-            f"Token usage — type=structured input={response.usage.input_tokens} "
-            f"output={response.usage.output_tokens}"
-        )
+        _log_usage("structured", response.usage)
 
         tool_use_block = next(
             (b for b in response.content if b.type == "tool_use"), None
@@ -196,6 +249,8 @@ class CodeReviewer:
         never taken from client input, or the review can leak another repo's code.
         Falls back to a plain `review_pr_diff` when there is no retriever or it
         finds no chunks. Retrieval itself is delegated to `CodeRetriever`.
+        Retrieved context is capped at `MAX_CONTEXT_CHARS`, dropping the
+        lowest-ranked chunks first.
 
         Args:
             on_stage: Awaited as each `ReviewStage` starts, to report progress
@@ -210,10 +265,13 @@ class CodeReviewer:
         await report_stage(ReviewStage.RETRIEVING)
         chunks = await self.retriever.retrieve(repo_id, diff)
         await report_stage(ReviewStage.REVIEWING)
+        chunks = _fit_context_budget(chunks)
         if not chunks:
             return await self.review_pr_diff(pr_label, diff)
 
-        context = "\n\n".join(_format_chunk(chunk) for chunk in chunks)
+        context = _CONTEXT_CHUNK_SEPARATOR.join(
+            _format_chunk(chunk) for chunk in chunks
+        )
         code_context = (
             f"Relevant context from the existing codebase:\n\n{context}\n\n"
             f"Pull request {pr_label}:\n\n```diff\n{diff}\n```"
@@ -244,11 +302,7 @@ class CodeReviewer:
                 async for text in stream.text_stream:
                     yield text
                 final_message = await stream.get_final_message()
-                usage = final_message.usage
-                logger.info(
-                    f"Token usage — type=stream input={usage.input_tokens} "
-                    f"output={usage.output_tokens}"
-                )
+                _log_usage("stream", final_message.usage)
         except anthropic.RateLimitError as e:
             # The client's exception handler can't cleanly turn this into a JSON
             # error response once streaming has started sending bytes, so log

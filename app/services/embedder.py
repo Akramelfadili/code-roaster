@@ -13,6 +13,7 @@ from voyageai.client_async import AsyncClient
 from voyageai.error import RateLimitError, VoyageError
 
 from app.config import settings
+from app.constants import MAX_QUERY_CHARS
 from app.exceptions import AIProviderError, AIProviderRateLimitError
 from app.services.chunker import Chunk
 
@@ -73,6 +74,8 @@ class Embedder:
 
         The query is embedded with ``input_type='query'`` so it lands in the
         same space as the document vectors produced by ``embed_chunks``.
+        Queries longer than ``MAX_QUERY_CHARS`` are truncated, with a logged
+        warning, before they are sent.
 
         Args:
             query: The natural-language search string.
@@ -86,6 +89,12 @@ class Embedder:
             AIProviderError: If the Voyage AI API call fails for any other
                 reason.
         """
+        if len(query) > MAX_QUERY_CHARS:
+            logger.warning(
+                f"Truncating embedding query from {len(query)} "
+                f"to {MAX_QUERY_CHARS} chars"
+            )
+            query = query[:MAX_QUERY_CHARS]
         vectors = await self._embed([query], _QUERY_INPUT_TYPE)
         return vectors[0]
 

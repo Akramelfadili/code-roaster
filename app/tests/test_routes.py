@@ -1,5 +1,6 @@
 from httpx import AsyncClient
 
+from app.constants import MAX_CODE_CHARS
 from app.tests.mocks import SAMPLE_CODE
 
 
@@ -73,3 +74,15 @@ class TestReviewStructured:
         assert response.status_code == 422
         errors = response.json()["detail"]
         assert any("empty" in e["msg"].lower() for e in errors)
+
+    async def test_code_over_max_length_returns_422(self, client: AsyncClient) -> None:
+        code = "x" * (MAX_CODE_CHARS + 1)
+        response = await client.post("/review/structured", json={"code": code})
+        assert response.status_code == 422
+        errors = response.json()["detail"]
+        assert any(e["type"] == "string_too_long" for e in errors)
+
+    async def test_code_at_max_length_is_accepted(self, client: AsyncClient) -> None:
+        code = "x" * MAX_CODE_CHARS
+        response = await client.post("/review/structured", json={"code": code})
+        assert response.status_code == 200

@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     database_url: str
     test_database_url: str | None = None
+    daily_cost_budget_usd: float = 10.0
 
 
 settings = Settings()

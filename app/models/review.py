@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.constants import Severity
+from app.constants import MAX_CODE_CHARS, MAX_LANGUAGE_CHARS, Severity
 
 
 class FindingCategory(StrEnum):
@@ -46,8 +46,8 @@ class Finding(BaseModel):
 
 
 class ReviewRequest(BaseModel):
-    code: str
-    language: str = "python"
+    code: str = Field(max_length=MAX_CODE_CHARS)
+    language: str = Field(default="python", max_length=MAX_LANGUAGE_CHARS)
 
     @field_validator("code")
     @classmethod

@@ -324,6 +324,38 @@ Every job ends with exactly one terminal event. Failures follow the `run_indexin
 
 Conventions: `app/CLAUDE.md` → *Database* and *Review jobs*.
 
+### 3.10 Input caps and cost visibility
+
+**Decision:** every input to an LLM or embedding call is capped by a constant in `app/constants.py`. Every Claude call logs its approximate cost in USD next to its token counts.
+
+**Why:** the endpoints were uncapped, so one request could fill Claude's whole context window. V5 agents make many calls per run, so one runaway run could drain the API balance. This was the biggest risk to close before V5.
+
+**The caps:**
+
+| Input | Cap (chars) | Where | On overflow |
+|---|---|---|---|
+| Pasted `code` | 50,000 | `ReviewRequest` | `422` |
+| `language` | 500 | `ReviewRequest` | `422` |
+| `pr_url` | 500 | `PRReviewRequest` | `422` |
+| PR diff | 100,000 | `GitHubService.fetch_pr_diff` | Truncated, before it is embedded or sent to Claude |
+| Retrieved context | 20,000 | `CodeReviewer` (`_fit_context_budget`) | Lowest-ranked chunks dropped first |
+| Embedding query | 10,000 | `Embedder.embed_query` | Truncated |
+
+- **Reject what the client sends, truncate what the server builds.** A user can shorten an oversized field, so the request gets a `422`. A large diff, context or query is not the user's mistake, so the review still runs on a truncated input. Each truncation logs a WARNING.
+- **Context keeps the most relevant chunks.** `CodeRetriever` returns chunks most similar first. `CodeReviewer` keeps the longest prefix of them that fits, so the least relevant chunks go first. If not even the top chunk fits, the review falls back to the diff alone (§5.2).
+- **The caps are measured in characters, not tokens.** Counting characters is free and needs no API call. At about 3–4 characters per token, a worst-case PR review (100k diff + 20k context) stays around 30–40k input tokens, well inside Sonnet's context window.
+
+**Cost:** `_log_usage` in `reviewer.py` prices each call's `usage` (input, output, cache write, cache read) with the `ANTHROPIC_*_COST_PER_MTOK_USD` constants for `ANTHROPIC_MODEL` (`claude-sonnet-4-6`: $3 / $15 per million input / output tokens). It logs the result as `cost_usd`.
+
+**Not enforced yet:** `Settings.daily_cost_budget_usd` (`DAILY_COST_BUDGET_USD`, default `$10`) and `BudgetExceededError` (`429`) are defined, but nothing adds up spend across requests or raises the error yet. Enforcing the budget needs a running total that every worker shares. By §3.8 that total belongs in Postgres (e.g. a per-day spend row updated after each call, checked before each call), so it lands as its own change, before V5.
+
+**Trade-offs:**
+
+- Silent truncation can hide part of a large PR from the review. The WARNING log is the only trace for now; the response does not say the review was partial.
+- Prices are hard-coded constants and need a manual update when the model or Anthropic's pricing changes.
+
+Conventions: `app/CLAUDE.md` → *Input Caps & Cost Budget*.
+
 ---
 
 ## 4. System Components
@@ -437,14 +469,15 @@ review request (snippet or PR diff)
    │    VectorStore.collection_exists  no index → []
    │    Embedder.embed_query           voyage-code-3, input_type="query"; failure → logged, []
    │    VectorStore.search(k)          nearest chunks, most similar first → list[Chunk]
-   ▼  CodeReviewer                  retrieved chunks injected as labelled context
-                                    (file_path:start–end) alongside the code under review
+   ▼  CodeReviewer                  chunks fitted to MAX_CONTEXT_CHARS (lowest-ranked dropped),
+                                    injected as labelled context (file_path:start–end)
+                                    alongside the code under review
 ```
 
 Still open:
 
 - how the query is built from a diff: the whole diff, or one query per hunk or per changed symbol;
-- the token budget for retrieved context (see "never send more context than needed" in `app/CLAUDE.md`);
+- whether to turn the context budget into a token budget: it is a character budget today, `MAX_CONTEXT_CHARS` (§3.10);
 - how the review prompt cites retrieved code.
 
 ### 5.3 Why these choices
@@ -460,7 +493,7 @@ Still open:
 | Version | Scope | Architectural impact |
 |---|---|---|
 | **V4 (in progress)** | RAG codebase indexing: an indexing endpoint using background tasks (§3.6) and retrieval-augmented reviews (§5.2). | New routes; `RepoIndexer`, `Embedder` and `VectorStore` wired into `lifespan`; the review prompt gains a context section. |
-| **V5: Agents** | The reviewer moves from single-shot calls to an agent loop that decides for itself what to inspect, using tools such as search the index, read a file, or fetch related PRs. | `CodeReviewer` evolves into a tool-using agent. The RAG services become agent tools. Error handling and token logging must cover multi-step runs. Runs reuse the review-job pattern (§3.9): each agent step is a new `review_events` type, streamed over the existing SSE endpoint. |
+| **V5: Agents** | The reviewer moves from single-shot calls to an agent loop that decides for itself what to inspect, using tools such as search the index, read a file, or fetch related PRs. | `CodeReviewer` evolves into a tool-using agent. The RAG services become agent tools. Error handling, token and cost logging must cover multi-step runs, and the daily cost budget (§3.10) must be enforced before agents ship. Runs reuse the review-job pattern (§3.9): each agent step is a new `review_events` type, streamed over the existing SSE endpoint. |
 | **V6: Deployment** | Production hosting. | Revisit: token transport and storage (§2 Auth); moving Chroma from local disk to a hosted vector store; moving `BackgroundTasks` to a durable job queue with heartbeats (job state is already in Postgres, §3.8; it would replace the timeout-based orphan sweep, §3.6); CORS and `frontend_url` per environment; secrets management beyond `.env`. |
 
 ---
