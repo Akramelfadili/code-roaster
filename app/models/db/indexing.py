@@ -2,20 +2,14 @@
 
 import uuid
 from datetime import datetime
-from enum import StrEnum
 
 from sqlalchemy import DateTime, Enum, Index, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.constants import IndexingJobState
-from app.database import Base
+from app.database import Base, enum_values
 
 ACTIVE_INDEXING_JOB_STATES = (IndexingJobState.PENDING, IndexingJobState.RUNNING)
-
-
-def _enum_values(enum_class: type[StrEnum]) -> list[str]:
-    """Store a `StrEnum`'s lowercase values in Postgres, not its member names."""
-    return [member.value for member in enum_class]
 
 
 class IndexingJob(Base):
@@ -36,7 +30,7 @@ class IndexingJob(Base):
         Enum(
             IndexingJobState,
             name="indexing_job_state",
-            values_callable=_enum_values,
+            values_callable=enum_values,
         ),
         default=IndexingJobState.PENDING,
     )

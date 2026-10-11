@@ -54,6 +54,11 @@ class AIProviderRateLimitError(AIProviderError):
     user_message: str | None = None
 
 
+class ReviewJobNotFoundError(ReviewError):
+    status_code = 404
+    log_level = logging.WARNING
+
+
 class MalformedAIResponseError(ReviewError):
     status_code = 500
     user_message: str | None = "Unexpected response from AI"

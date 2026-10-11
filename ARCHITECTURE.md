@@ -210,7 +210,7 @@ If these start to hurt (see §6), move execution to a real job queue; the `index
 
 ### 3.7 Review response contract (`/review/*`): structured `Finding` objects
 
-**Decision:** `POST /review/structured` and `POST /review/pr` return the same `StructuredReviewResponse`:
+**Decision:** `POST /review/structured` and `POST /review/pr` return the same `StructuredReviewResponse`. A review job (§3.9) stores the same shape in `reviews.result` and sends it as its `completed` event:
 
 | Field | Type |
 |---|---|
@@ -261,7 +261,7 @@ Conventions: `app/CLAUDE.md` → *Review Findings*, `frontend/claude-docs/data-l
 
 ### 3.8 Postgres for all job state (SQLAlchemy async + Alembic)
 
-**Decision:** every piece of job state — indexing jobs today, agent runs in V5 — lives in **Postgres**, **never in process memory** (`app.state`, module globals, caches). Each job is a row; services read and write it through an `AsyncSession`.
+**Decision:** every piece of job state — indexing and review jobs today, agent runs in V5 — lives in **Postgres**, **never in process memory** (`app.state`, module globals, caches). Each job is a row; services read and write it through an `AsyncSession`.
 
 **Why:**
 
@@ -275,14 +275,54 @@ Conventions: `app/CLAUDE.md` → *Review Findings*, `frontend/claude-docs/data-l
 - `app/database.py` owns the async engine, `SessionFactory`, `Base` and the `get_db` dependency (`DbSession`). ORM tables live in `app/models/db/`, apart from the Pydantic API models, and services map rows to response models.
 - The `lifespan` calls `init_db()` and puts `SessionFactory` on `app.state.session_factory`. Background tasks receive it explicitly and open their own short sessions, because the request's session is closed by the time they run.
 - **Schema:** startup runs `alembic upgrade head` in every environment, so a database is always exactly what the migrations define. There is no `create_all` shortcut, because it never alters existing tables and silently drifts from the migrations. Migrations live in `app/migrations/versions/`.
-- **Orphaned jobs:** right after migrating, the lifespan calls `fail_orphaned_indexing_jobs` (§3.6).
+- **Orphaned jobs:** right after migrating, the lifespan calls `fail_orphaned_indexing_jobs` (§3.6) and `fail_orphaned_review_jobs` (§3.9).
 
 **Trade-offs:**
 
-- A Postgres server is now required to run the backend, and to run the indexing route tests (`TEST_DATABASE_URL`).
+- A Postgres server is now required to run the backend, and to run the DB-backed tests (`TEST_DATABASE_URL`).
 - Every model change needs a migration before the app will see it, including in development.
 
 Conventions: `app/CLAUDE.md` → *Database*.
+
+### 3.9 Reviews as jobs, streamed over SSE
+
+**Decision:** alongside the synchronous `POST /review/pr` (kept unchanged), a PR review can run as a **job**. `POST /review/pr/async` takes the same `PRReviewRequest`, records a `reviews` row and returns `202 {"job_id": ...}`; `run_review_job` then runs as a background task. The client follows the job with **Server-Sent Events** on `GET /review/pr/{job_id}/events`.
+
+**Why:** a synchronous request holds the connection open until Claude answers. That is fine for one call of a few seconds, but V5 agent loops run for minutes. Proxies time out, the UI shows nothing in the meantime, and a dropped connection loses the result. A job decouples the run from the request. SSE (rather than polling a status endpoint, as indexing does) pushes each step as it happens. That matters once an agent has many steps to show. SSE is one-way, plain HTTP, and the browser's `EventSource` reconnects on its own.
+
+**How it is wired:**
+
+- **Two tables** (`app/models/db/review.py`):
+  - `reviews`: one row per job. Columns: `id`, `repo_id`, `pr_url`, `state` (`pending` → `running` → `completed` / `failed`), `result` (JSONB, the full `StructuredReviewResponse`), `error`, `created_at`, `updated_at`.
+  - `review_events`: an append-only log. Columns: `id` (a global sequence), `review_id`, `type`, `data` (JSONB), `created_at`.
+- **The runner writes, the stream reads, and Postgres sits between them.** `run_review_job` appends an event at each step. A state change and its event are committed in one transaction. `stream_review_events` polls the log every 0.5 s for events newer than the last one it sent. Nothing passes through process memory (§3.8), so a client can follow a job running on another worker.
+- **Replay and resume.** Each SSE message carries `id: <event id>`. A new subscriber gets every event from the start. A reconnecting `EventSource` sends `Last-Event-ID` and resumes after it. The stream ends after the terminal event, or straight away if the job already finished and nothing newer exists.
+- **Access check before retrieval.** The route parses the PR URL (bad URL → `400` before any job is created) and derives `repo_id` from it, never from the client. The job fetches the diff with the caller's token **before** it retrieves any context, so the guarantee of `POST /review/pr` holds (§5.2). The GitHub token is passed to the background task and never stored.
+- **Progress comes from the reviewer.** `CodeReviewer.review_pr_with_context` takes an optional `on_stage` callback, the same pattern as `RepoIndexer`. The job turns each `ReviewStage` into an event.
+- **No pooled connection held by a stream.** The SSE route checks that the job exists with `FunctionScopedDbSession`, which closes before the body starts streaming. An unknown ID becomes a normal JSON `404`. Each poll then opens its own short session. FastAPI's `EventSourceResponse` sends a keep-alive comment every 15 s while no events arrive.
+
+**SSE event types.** Each message's `data:` is JSON `{"id": int, "type": ..., "data": ...}` (`ReviewEventMessage`). No `event:` field is set, so `EventSource.onmessage` receives every type.
+
+| `type` | When | `data` |
+|---|---|---|
+| `retrieving` | Retrieval of indexed context starts (skipped when no retriever is configured) | `null` |
+| `reviewing` | The Claude review call starts | `null` |
+| `finding` | Once per finding, after the review returns: bugs, then security issues, suggestions, positives | a `Finding` (§3.7) |
+| `completed` | **Terminal.** The job succeeded | the full `StructuredReviewResponse` |
+| `failed` | **Terminal.** The job failed, or was swept as orphaned | `{"error": "<client-safe message>"}` |
+
+Every job ends with exactly one terminal event. Failures follow the `run_indexing_job` rules: an `AppError` records its `client_message`, and anything else records `"Internal server error"`.
+
+**Built for agent steps.** `review_events.type` is a plain string column, not a Postgres enum, so a new `ReviewEventType` (e.g. `tool_call`, `tool_result`) needs no migration. An agent loop appends events the same way. Today `finding` events arrive in one burst, because the single Claude call returns every finding at once. An agent would emit each one as it finds it.
+
+**Known limits:**
+
+- **Same execution model as indexing (§3.6).** The job runs in-process, so a restart kills it. On startup, `fail_orphaned_review_jobs` marks `pending`/`running` jobs not updated for `REVIEW_JOB_TIMEOUT_SECONDS` (30 min) as `failed` and appends their `failed` event. Every event bumps `updated_at`, so a runner that keeps emitting events is never swept. A single step longer than 30 minutes would be swept, though.
+- **Polling, not push.** Events reach the client up to 0.5 s late, and each open stream runs one small query per poll. `LISTEN/NOTIFY` is the upgrade path if many streams are open at once.
+- **Clients must `close()` the `EventSource` on `completed`/`failed`.** Otherwise the browser reconnects after the stream ends. Each reconnect gets an empty stream that closes at once, so it is wasteful but harmless.
+- **No job listing, cancellation or retention** yet. Rows and events are kept forever.
+
+Conventions: `app/CLAUDE.md` → *Database* and *Review jobs*.
 
 ---
 
@@ -302,6 +342,12 @@ main.py (lifespan: builds singletons on app.state; the AppError handler and the 
 ├── routes/auth.py     GET  /auth/github          ─┐
 │                      GET  /auth/github/callback ─┴▶ GitHubService.exchange_code_for_token
 └── routes/health.py   GET  /health
+
+routes/pr.py     POST /review/pr/async        ─▶ create_review_job ─────▶ Postgres (reviews)
+                 GET  /review/pr/{id}/events  ─▶ stream_review_events ──▶ Postgres (review_events, polled) ─▶ SSE
+                 (background)                 ─▶ run_review_job ─▶ Postgres (state + events, one tx per step)
+                                                                ─▶ GitHubService.fetch_pr_diff ─▶ GitHub
+                                                                ─▶ CodeReviewer.review_pr_with_context(on_stage=…)
 
 routes/index.py  POST /index/repo        ─▶ create_indexing_job ─────▶ Postgres (indexing_jobs)
                  GET  /index/status/{id} ─▶ get_latest_indexing_job ─▶ Postgres
@@ -414,7 +460,7 @@ Still open:
 | Version | Scope | Architectural impact |
 |---|---|---|
 | **V4 (in progress)** | RAG codebase indexing: an indexing endpoint using background tasks (§3.6) and retrieval-augmented reviews (§5.2). | New routes; `RepoIndexer`, `Embedder` and `VectorStore` wired into `lifespan`; the review prompt gains a context section. |
-| **V5: Agents** | The reviewer moves from single-shot calls to an agent loop that decides for itself what to inspect, using tools such as search the index, read a file, or fetch related PRs. | `CodeReviewer` evolves into a tool-using agent. The RAG services become agent tools. Error handling and token logging must cover multi-step runs. |
+| **V5: Agents** | The reviewer moves from single-shot calls to an agent loop that decides for itself what to inspect, using tools such as search the index, read a file, or fetch related PRs. | `CodeReviewer` evolves into a tool-using agent. The RAG services become agent tools. Error handling and token logging must cover multi-step runs. Runs reuse the review-job pattern (§3.9): each agent step is a new `review_events` type, streamed over the existing SSE endpoint. |
 | **V6: Deployment** | Production hosting. | Revisit: token transport and storage (§2 Auth); moving Chroma from local disk to a hosted vector store; moving `BackgroundTasks` to a durable job queue with heartbeats (job state is already in Postgres, §3.8; it would replace the timeout-based orphan sweep, §3.6); CORS and `frontend_url` per environment; secrets management beyond `.env`. |
 
 ---

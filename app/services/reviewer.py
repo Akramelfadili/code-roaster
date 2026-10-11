@@ -1,5 +1,5 @@
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import cast
 
 import anthropic
@@ -7,7 +7,7 @@ from anthropic import APIError
 from pydantic import ValidationError
 
 from app.config import settings
-from app.constants import ANTHROPIC_MAX_TOKENS, ANTHROPIC_MODEL
+from app.constants import ANTHROPIC_MAX_TOKENS, ANTHROPIC_MODEL, ReviewStage
 from app.exceptions import (
     AIProviderError,
     AIProviderRateLimitError,
@@ -37,6 +37,10 @@ _REQUIRED_REVIEW_FIELDS = ("summary", "severity", "score", "detected_language")
 # Finding fields the server always sets itself; dropped from tool input even if
 # Claude volunteers them, so they can never come from the model.
 _SERVER_SET_FINDING_FIELDS = frozenset({"id", "category"})
+
+
+async def _ignore_stage(_stage: ReviewStage) -> None:
+    """Default `on_stage`: progress reporting is optional."""
 
 
 def _format_chunk(chunk: Chunk) -> str:
@@ -180,7 +184,11 @@ class CodeReviewer:
         return await self.review_structured(code=code_context, language="diff")
 
     async def review_pr_with_context(
-        self, diff: str, repo_id: str, pr_label: str
+        self,
+        diff: str,
+        repo_id: str,
+        pr_label: str,
+        on_stage: Callable[[ReviewStage], Awaitable[None]] | None = None,
     ) -> StructuredReview:
         """Review a PR diff augmented with the most relevant indexed codebase chunks.
 
@@ -188,11 +196,20 @@ class CodeReviewer:
         never taken from client input, or the review can leak another repo's code.
         Falls back to a plain `review_pr_diff` when there is no retriever or it
         finds no chunks. Retrieval itself is delegated to `CodeRetriever`.
+
+        Args:
+            on_stage: Awaited as each `ReviewStage` starts, to report progress
+                (review jobs turn it into SSE events). `retrieving` is skipped
+                when there is no retriever.
         """
+        report_stage = on_stage or _ignore_stage
         if self.retriever is None:
+            await report_stage(ReviewStage.REVIEWING)
             return await self.review_pr_diff(pr_label, diff)
 
+        await report_stage(ReviewStage.RETRIEVING)
         chunks = await self.retriever.retrieve(repo_id, diff)
+        await report_stage(ReviewStage.REVIEWING)
         if not chunks:
             return await self.review_pr_diff(pr_label, diff)
 

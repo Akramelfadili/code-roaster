@@ -58,3 +58,40 @@ class IndexingJobState(StrEnum):
 # running on another worker isn't swept.
 INDEXING_JOB_TIMEOUT_SECONDS = 30 * 60
 INDEXING_JOB_ORPHANED_ERROR = "Server restarted"
+
+
+class ReviewStage(StrEnum):
+    """The `CodeReviewer` PR review step currently running."""
+
+    RETRIEVING = "retrieving"
+    REVIEWING = "reviewing"
+
+
+class ReviewJobState(StrEnum):
+    """Lifecycle state of a background PR review job."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ReviewEventType(StrEnum):
+    """Type of one event in a review job's SSE stream.
+
+    `completed` and `failed` are terminal: each job emits exactly one of them,
+    last. V5 agent steps add new members here — stored as plain strings, so
+    a new type needs no migration.
+    """
+
+    RETRIEVING = "retrieving"
+    REVIEWING = "reviewing"
+    FINDING = "finding"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+# Same sweep as indexing jobs: a review job still pending or running at
+# startup whose row hasn't been updated for this long is marked failed.
+REVIEW_JOB_TIMEOUT_SECONDS = 30 * 60
+REVIEW_JOB_ORPHANED_ERROR = "Server restarted"

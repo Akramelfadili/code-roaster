@@ -17,4 +17,4 @@
 ## Exceptions to "services never catch or log"
 - **Streaming** (`CodeReviewer.review_stream`): once response bytes are flowing, `main.py` can't turn a failure into a clean JSON error, so the service logs with full context and re-raises
 - **Retrieval** (`CodeRetriever.retrieve`): context is optional, so a query-embedding `AIProviderError` is logged at WARNING and returns `[]` — the review proceeds without context instead of failing
-- **Background jobs** (`run_indexing_job`): the 202 is already sent, so it catches every failure, logs it, and records `AppError.client_message` (or `INTERNAL_SERVER_ERROR_MESSAGE` for unmodeled exceptions) on the job
+- **Background jobs** (`run_indexing_job`, `run_review_job`): the 202 is already sent, so they catch every failure, log it, and record `AppError.client_message` (or `INTERNAL_SERVER_ERROR_MESSAGE` for unmodeled exceptions) on the job. `run_review_job` also emits it as the terminal `failed` SSE event

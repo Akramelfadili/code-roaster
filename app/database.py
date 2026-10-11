@@ -1,7 +1,7 @@
 """Async SQLAlchemy engine, session factory, declarative base and schema setup.
 
-Postgres is the single home of persisted state (indexing jobs today, agent
-runs next) — nothing that must survive a restart or be shared between
+Postgres is the single home of persisted state (indexing and review jobs
+today, agent runs next) — nothing that must survive a restart or be shared between
 workers lives in process memory. The `lifespan` in `main.py` calls
 `init_db` once at startup to run the Alembic migrations, and puts
 `SessionFactory` on `app.state`, where `get_db` and the background job
@@ -9,6 +9,7 @@ runners read it.
 """
 
 from collections.abc import AsyncIterator
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -32,6 +33,11 @@ class Base(DeclarativeBase):
     """Declarative base every ORM table in `app/models/db/` inherits from."""
 
 
+def enum_values(enum_class: type[StrEnum]) -> list[str]:
+    """Store a `StrEnum`'s lowercase values in Postgres, not its member names."""
+    return [member.value for member in enum_class]
+
+
 async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
     """Yield a session for one request, closed once the request is done."""
     session_factory: async_sessionmaker[AsyncSession] = (
@@ -42,6 +48,11 @@ async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
 
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+# Closed as soon as the path operation function returns, instead of after the
+# response is sent. SSE routes use it, so a stream that stays open for minutes
+# doesn't hold a pooled connection; the stream itself opens short sessions.
+FunctionScopedDbSession = Annotated[AsyncSession, Depends(get_db, scope="function")]
 
 
 async def init_db() -> None:

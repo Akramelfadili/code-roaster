@@ -19,7 +19,7 @@
 - Service level: inject `httpx.MockTransport(handler)` via `GitHubService(..., transport=...)` and assert on returned data or the raised domain exception
 
 **Database (Postgres):**
-- Tests that touch the DB (`test_index.py`, `test_indexing_jobs.py`) use the `db_session_factory` fixture. It drops and recreates every table on `TEST_DATABASE_URL` with `create_all` (fast; `alembic check` guards against drift from the migrations), then sets `app.state.session_factory` — same pattern as the mocked services
+- Tests that touch the DB (`test_index.py`, `test_indexing_jobs.py`, `test_review_jobs.py`, and the `TestReviewPrAsync` / `TestReviewPrEvents` classes in `test_pr.py`) use the `db_session_factory` fixture. It drops and recreates every table on `TEST_DATABASE_URL` with `create_all` (fast; `alembic check` guards against drift from the migrations), then sets `app.state.session_factory` — same pattern as the mocked services
 - Without `TEST_DATABASE_URL` those tests are **skipped**, not failed; everything else runs with no database
 - `TEST_DATABASE_URL` must be a separate, disposable database — it is wiped on every test. Never point it at `DATABASE_URL`'s database
 - `DATABASE_URL` must still be set (any value works) — importing `app.main` builds `Settings`, but no test connects to it
@@ -29,6 +29,11 @@
   # .env: TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/code_roaster_test
   make test-back
   ```
+
+**SSE endpoints:**
+- `BackgroundTasks` finish before `ASGITransport` returns the `202`, so by the time the test opens the stream every event is already written. A plain `await client.get(...)` reads the whole stream, and the stream ends on the terminal event
+- Parse `response.text` by its `data: ` lines (`_parse_sse_data` in `test_pr.py`). To emit stage events from the mocked reviewer, give `review_pr_with_context` a `side_effect` that awaits `on_stage`
+- To test following a live job, run `stream_review_events` in an `asyncio.Task` and write events while it runs. Monkeypatch `review_jobs._EVENT_POLL_INTERVAL_SECONDS` down to keep the test fast
 
 **Naming:** `test_<what>_<expected_outcome>` — e.g. `test_empty_code_returns_422`
 

@@ -22,6 +22,7 @@ from app.services.github import GitHubService
 from app.services.indexer import RepoIndexer
 from app.services.indexing_jobs import fail_orphaned_indexing_jobs
 from app.services.retriever import CodeRetriever
+from app.services.review_jobs import fail_orphaned_review_jobs
 from app.services.reviewer import CodeReviewer
 from app.services.vector_store import VectorStore
 
@@ -42,6 +43,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning(
             f"Marked {len(orphaned_repo_ids)} orphaned indexing job(s) as failed: "
             f"{', '.join(orphaned_repo_ids)}"
+        )
+    orphaned_review_job_ids = await fail_orphaned_review_jobs(SessionFactory)
+    if orphaned_review_job_ids:
+        logger.warning(
+            f"Marked {len(orphaned_review_job_ids)} orphaned review job(s) as "
+            f"failed: {', '.join(str(job_id) for job_id in orphaned_review_job_ids)}"
         )
     app.state.github_service = GitHubService(
         client_id=settings.github_client_id,

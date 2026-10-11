@@ -7,6 +7,7 @@ import anthropic
 import httpx
 import pytest
 
+from app.constants import ReviewStage
 from app.exceptions import (
     AIProviderError,
     AIProviderRateLimitError,
@@ -318,6 +319,32 @@ class TestReviewPrWithContext:
         content = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
         assert self._DIFF in content
         assert "Relevant context" not in content
+
+    async def test_reports_retrieving_then_reviewing_stage(self) -> None:
+        reviewer, _, _ = self._make_reviewer(chunks=[SAMPLE_CHUNK])
+        on_stage = AsyncMock()
+
+        await reviewer.review_pr_with_context(
+            self._DIFF, SAMPLE_REPO_ID, self._PR_LABEL, on_stage=on_stage
+        )
+
+        stages = [call.args[0] for call in on_stage.await_args_list]
+        assert stages == [ReviewStage.RETRIEVING, ReviewStage.REVIEWING]
+
+    async def test_no_retriever_reports_only_reviewing_stage(self) -> None:
+        mock_client = MagicMock()
+        tool_use_block = SimpleNamespace(type="tool_use", input=_SAMPLE_TOOL_OUTPUT)
+        mock_client.messages.create = AsyncMock(
+            return_value=_make_response([tool_use_block])
+        )
+        reviewer = CodeReviewer(client=mock_client)
+        on_stage = AsyncMock()
+
+        await reviewer.review_pr_with_context(
+            self._DIFF, SAMPLE_REPO_ID, self._PR_LABEL, on_stage=on_stage
+        )
+
+        on_stage.assert_awaited_once_with(ReviewStage.REVIEWING)
 
 
 class TestReviewStream:
