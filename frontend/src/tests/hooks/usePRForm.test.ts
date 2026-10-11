@@ -6,7 +6,7 @@ import { usePRForm } from '@/hooks/usePRForm';
 describe('usePRForm', () => {
   it('does not call onSubmit when prUrl is empty', () => {
     const onSubmit = vi.fn();
-    const { result } = renderHook(() => usePRForm(onSubmit, 'gh-token'));
+    const { result } = renderHook(() => usePRForm(onSubmit, 'gh-token', null));
 
     act(() => {
       result.current.handleSubmit();
@@ -17,7 +17,7 @@ describe('usePRForm', () => {
 
   it('does not call onSubmit when githubToken is null', () => {
     const onSubmit = vi.fn();
-    const { result } = renderHook(() => usePRForm(onSubmit, null));
+    const { result } = renderHook(() => usePRForm(onSubmit, null, null));
 
     act(() => {
       result.current.setPrUrl('https://github.com/owner/repo/pull/1');
@@ -31,7 +31,7 @@ describe('usePRForm', () => {
 
   it('calls onSubmit with the prUrl and githubToken when both are present', () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
-    const { result } = renderHook(() => usePRForm(onSubmit, 'gh-token'));
+    const { result } = renderHook(() => usePRForm(onSubmit, 'gh-token', null));
 
     act(() => {
       result.current.setPrUrl('https://github.com/owner/repo/pull/1');
@@ -43,6 +43,25 @@ describe('usePRForm', () => {
     expect(onSubmit).toHaveBeenCalledWith({
       prUrl: 'https://github.com/owner/repo/pull/1',
       githubToken: 'gh-token',
+      repoId: null,
+    });
+  });
+
+  it('includes the indexed repoId when one is provided', () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() => usePRForm(onSubmit, 'gh-token', 'owner__repo'));
+
+    act(() => {
+      result.current.setPrUrl('https://github.com/owner/repo/pull/1');
+    });
+    act(() => {
+      result.current.handleSubmit();
+    });
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      prUrl: 'https://github.com/owner/repo/pull/1',
+      githubToken: 'gh-token',
+      repoId: 'owner__repo',
     });
   });
 });

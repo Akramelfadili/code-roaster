@@ -6,15 +6,21 @@ import { getErrorMessage } from '@/utils/errors';
 
 interface ErrorMessageProps {
   error: AppError;
+  /** Overrides the generic message derived from the error's code. */
+  message?: string;
   onRetry?: () => void;
 }
 
-export function ErrorMessage({ error, onRetry }: ErrorMessageProps): JSX.Element {
+export function ErrorMessage({
+  error,
+  message,
+  onRetry,
+}: ErrorMessageProps): JSX.Element {
   return (
     <div
       className={`border rounded-lg px-4 py-3 text-sm flex items-center justify-between ${ERROR_STYLES[error.code]}`}
     >
-      <span>{getErrorMessage(error)}</span>
+      <span>{message ?? getErrorMessage(error)}</span>
       {onRetry !== undefined && (
         <button
           className="ml-4 text-xs underline opacity-75 hover:opacity-100 transition-opacity shrink-0"

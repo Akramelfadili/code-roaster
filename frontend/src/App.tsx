@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import type { JSX } from 'react/jsx-runtime';
 
 import { CodeInput } from '@/components/CodeInput';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ErrorMessage } from '@/components/ErrorMessage';
 import { Header } from '@/components/Header';
 import { PRReviewPanel } from '@/components/PRReviewPanel';
+import { RepoIndexer } from '@/components/RepoIndexer';
 import { ReviewModeTabs } from '@/components/ReviewModeTabs';
 import { ReviewResult } from '@/components/ReviewResult';
 import { StreamingText } from '@/components/StreamingText';
@@ -13,6 +15,7 @@ import { useGitHubAuth } from '@/hooks/useGitHubAuth';
 import { useGitHubUser } from '@/hooks/useGitHubUser';
 import { usePRForm } from '@/hooks/usePRForm';
 import { usePRReview } from '@/hooks/usePRReview';
+import { useRepoIndexer } from '@/hooks/useRepoIndexer';
 import { useReview } from '@/hooks/useReview';
 import { ReviewMode } from '@/types/review';
 
@@ -39,10 +42,21 @@ export default function App(): JSX.Element {
   const { submitPRReview, isLoadingPRReview, prReviewError, prReviewResult } =
     usePRReview();
   const {
+    repoUrl,
+    setRepoUrl,
+    handleSubmit: handleIndexSubmit,
+    isStartingIndexing,
+    isIndexingActive,
+    indexingStatus,
+    indexingError,
+    indexingErrorMessage,
+    indexedRepoId,
+  } = useRepoIndexer(githubToken);
+  const {
     prUrl,
     setPrUrl,
     handleSubmit: handlePrSubmit,
-  } = usePRForm(submitPRReview, githubToken);
+  } = usePRForm(submitPRReview, githubToken, indexedRepoId);
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 font-sans">
@@ -90,7 +104,22 @@ export default function App(): JSX.Element {
             role="tabpanel"
             id="review-panel-pr"
             aria-labelledby={`review-tab-${ReviewMode.PR}`}
+            className="space-y-5"
           >
+            {isAuthenticated && (
+              <ErrorBoundary>
+                <RepoIndexer
+                  repoUrl={repoUrl}
+                  onRepoUrlChange={setRepoUrl}
+                  onSubmit={handleIndexSubmit}
+                  isStartingIndexing={isStartingIndexing}
+                  isIndexingActive={isIndexingActive}
+                  indexingStatus={indexingStatus}
+                  indexingError={indexingError}
+                  indexingErrorMessage={indexingErrorMessage}
+                />
+              </ErrorBoundary>
+            )}
             <ErrorBoundary>
               <PRReviewPanel
                 isAuthenticated={isAuthenticated}

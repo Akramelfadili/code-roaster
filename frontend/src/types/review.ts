@@ -73,6 +73,8 @@ export type ReviewMode = (typeof ReviewMode)[keyof typeof ReviewMode];
 export interface PRReviewRequest {
   prUrl: string;
   githubToken: string;
+  /** Indexed repository to pull codebase context from, or null for a diff-only review. */
+  repoId: string | null;
 }
 
 export interface UsePRReviewReturn {

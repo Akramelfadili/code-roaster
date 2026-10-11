@@ -7,6 +7,7 @@ import { GITHUB_SESSION_EXPIRED_MESSAGE } from '@/constants/auth';
 import { useGitHubAuth } from '@/hooks/useGitHubAuth';
 import { useGitHubUser } from '@/hooks/useGitHubUser';
 import { usePRReview } from '@/hooks/usePRReview';
+import { useRepoIndexer } from '@/hooks/useRepoIndexer';
 import { useReview } from '@/hooks/useReview';
 import { AppError, AppErrorCode } from '@/types/errors';
 import { Severity } from '@/types/review';
@@ -14,6 +15,7 @@ import type { ReviewData } from '@/types/review';
 
 vi.mock('@/hooks/useReview');
 vi.mock('@/hooks/usePRReview');
+vi.mock('@/hooks/useRepoIndexer');
 vi.mock('@/hooks/useGitHubAuth');
 vi.mock('@/hooks/useGitHubUser');
 
@@ -36,6 +38,18 @@ const idlePRReviewState = {
   isLoadingPRReview: false,
   prReviewError: null,
   prReviewResult: null,
+};
+
+const idleRepoIndexerState = {
+  repoUrl: '',
+  setRepoUrl: vi.fn(),
+  handleSubmit: vi.fn(),
+  isStartingIndexing: false,
+  isIndexingActive: false,
+  indexingStatus: null,
+  indexingError: null,
+  indexingErrorMessage: null,
+  indexedRepoId: null,
 };
 
 const loggedOutAuthState = {
@@ -65,6 +79,7 @@ describe('App', () => {
   beforeEach(() => {
     vi.mocked(useReview).mockReturnValue(idleState);
     vi.mocked(usePRReview).mockReturnValue(idlePRReviewState);
+    vi.mocked(useRepoIndexer).mockReturnValue(idleRepoIndexerState);
     vi.mocked(useGitHubAuth).mockReturnValue(loggedOutAuthState);
     vi.mocked(useGitHubUser).mockReturnValue(idleGitHubUserState);
   });
@@ -140,6 +155,9 @@ describe('App', () => {
 
     expect(
       screen.queryByPlaceholderText(/github.com\/owner\/repo\/pull/)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Index Repository' })
     ).not.toBeInTheDocument();
   });
 
@@ -222,6 +240,36 @@ describe('App', () => {
       screen.getByPlaceholderText('https://github.com/owner/repo/pull/123')
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Review PR' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Index Repository' })
+    ).toBeInTheDocument();
+  });
+
+  it('passes the indexed repo id along when submitting a PR review', async () => {
+    vi.mocked(useGitHubAuth).mockReturnValue({
+      ...loggedOutAuthState,
+      githubToken: 'gh-token',
+      isAuthenticated: true,
+    });
+    vi.mocked(useRepoIndexer).mockReturnValue({
+      ...idleRepoIndexerState,
+      indexedRepoId: 'owner__repo',
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Review PR' }));
+    await user.type(
+      screen.getByPlaceholderText('https://github.com/owner/repo/pull/123'),
+      'https://github.com/owner/repo/pull/1'
+    );
+    await user.click(screen.getByRole('button', { name: 'Review PR' }));
+
+    expect(mockSubmitPRReview).toHaveBeenCalledWith({
+      prUrl: 'https://github.com/owner/repo/pull/1',
+      githubToken: 'gh-token',
+      repoId: 'owner__repo',
+    });
   });
 
   it('renders the structured review after a successful PR review', async () => {
