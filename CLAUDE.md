@@ -24,14 +24,17 @@ All commands run from the project root via `make`.
 
 | Command | What it does |
 |---|---|
+| `make run` | Run backend and frontend together (honcho, via `Procfile`) |
+| `make run-back` | Run the FastAPI backend with auto-reload (`uvicorn app.main:app --reload`) |
+| `make run-front` | Run the Vite dev server |
 | `make lint-back` | Ruff lint check on `app/` |
 | `make format-back` | Ruff format `app/` (mutates files) |
 | `make type-back` | Mypy strict type check on `app/` |
 | `make security-back` | Bandit security scan on `app/` |
 | `make test-back` | Pytest suite in `app/tests/` |
-| `make lint-front` | Oxlint on `frontend/src/` |
+| `make lint-front` | ESLint on `frontend/src/` (`npm run lint`) |
 | `make format-front` | Prettier format check on `frontend/src/` |
-| `make type-front` | TypeScript type check (`tsc --noEmit`) |
+| `make type-front` | TypeScript type check (`tsc -b tsconfig.app.json --noEmit`) |
 | `make test-front` | Vitest suite in `frontend/` |
 | `make check-all` | Runs all checks (no format-back — it mutates) |
 
@@ -40,6 +43,7 @@ All commands run from the project root via `make`.
 - Loaded exclusively through the backend's `Settings` (`app/config.py`) — see `app/CLAUDE.md`'s Configuration section
 
 ## Documentation
+- [ARCHITECTURE.md](ARCHITECTURE.md) — system overview, architecture decisions, RAG pipeline design. Read it on demand; update it when a decision or component changes
 - `docs/` holds the architecture diagrams (Excalidraw) — update them for major structural changes so they don't go stale
 
 ## Git Rules

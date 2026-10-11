@@ -8,7 +8,6 @@ export async function fetchPRReview(request: PRReviewRequest): Promise<ReviewDat
   const response = await httpClient.post<unknown>(API_PR_REVIEW_ENDPOINT, {
     pr_url: request.prUrl,
     github_token: request.githubToken,
-    repo_id: request.repoId,
   });
   return mapToReviewData(parseReviewResult(response));
 }

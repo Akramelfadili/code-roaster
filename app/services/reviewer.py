@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from typing import cast
@@ -135,16 +134,16 @@ class CodeReviewer:
     ) -> StructuredReview:
         """Review a PR diff augmented with the most relevant indexed codebase chunks.
 
+        `repo_id` must be derived server-side from a PR the caller can access,
+        never taken from client input, or the review can leak another repo's code.
         Falls back to a plain `review_pr_diff` when the repo has no index.
         """
         vector_store = self.vector_store_factory(repo_id)
-        if not await asyncio.to_thread(vector_store.collection_exists):
+        if not await vector_store.collection_exists():
             return await self.review_pr_diff(pr_label, diff)
 
         query_vector = await self.embedder.embed_query(diff)
-        chunks = await asyncio.to_thread(
-            vector_store.search, query_vector, _RETRIEVED_CHUNK_COUNT
-        )
+        chunks = await vector_store.search(query_vector, _RETRIEVED_CHUNK_COUNT)
         if not chunks:
             return await self.review_pr_diff(pr_label, diff)
 

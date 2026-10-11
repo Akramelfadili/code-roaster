@@ -10,14 +10,13 @@ interface UsePRFormReturn {
 
 export function usePRForm(
   onSubmit: (request: PRReviewRequest) => Promise<void>,
-  githubToken: string | null,
-  repoId: string | null
+  githubToken: string | null
 ): UsePRFormReturn {
   const [prUrl, setPrUrl] = useState('');
 
   function handleSubmit(): void {
     if (!prUrl.trim() || githubToken === null) return;
-    void onSubmit({ prUrl, githubToken, repoId });
+    void onSubmit({ prUrl, githubToken });
   }
 
   return { prUrl, setPrUrl, handleSubmit };

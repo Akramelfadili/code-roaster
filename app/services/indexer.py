@@ -78,6 +78,9 @@ class RepoIndexer:
     ) -> IndexingResult:
         """Fetch, chunk, embed, and store a repository's supported source files.
 
+        The collection is cleared before storing, so chunks from files deleted
+        or renamed since a previous run don't linger in the index.
+
         Args:
             repo_url: HTTPS URL of the repository to index.
             github_token: GitHub access token used to fetch its files.
@@ -104,7 +107,9 @@ class RepoIndexer:
         logger.info(f"Embedded {len(embeddings)} chunks")
 
         report_stage(IndexingStage.STORING)
-        self._vector_store_factory(collection_name).add_chunks(chunks, embeddings)
+        vector_store = self._vector_store_factory(collection_name)
+        await vector_store.delete_collection()
+        await vector_store.add_chunks(chunks, embeddings)
         logger.info(f"Stored {len(chunks)} chunks for {repo_url}")
 
         return IndexingResult(

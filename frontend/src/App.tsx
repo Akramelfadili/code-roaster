@@ -50,13 +50,12 @@ export default function App(): JSX.Element {
     indexingStatus,
     indexingError,
     indexingErrorMessage,
-    indexedRepoId,
   } = useRepoIndexer(githubToken);
   const {
     prUrl,
     setPrUrl,
     handleSubmit: handlePrSubmit,
-  } = usePRForm(submitPRReview, githubToken, indexedRepoId);
+  } = usePRForm(submitPRReview, githubToken);
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 font-sans">

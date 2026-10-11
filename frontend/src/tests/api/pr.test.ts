@@ -34,19 +34,17 @@ describe('fetchPRReview', () => {
     vi.clearAllMocks();
   });
 
-  it('posts the PR url, github token and repo id, then maps the parsed result', async () => {
+  it('posts the PR url and github token, then maps the parsed result', async () => {
     vi.mocked(httpClient.post).mockResolvedValue(mockReviewDTO);
 
     const result = await fetchPRReview({
       prUrl: 'https://github.com/owner/repo/pull/1',
       githubToken: 'gh-token',
-      repoId: 'owner__repo',
     });
 
     expect(httpClient.post).toHaveBeenCalledWith(API_PR_REVIEW_ENDPOINT, {
       pr_url: 'https://github.com/owner/repo/pull/1',
       github_token: 'gh-token',
-      repo_id: 'owner__repo',
     });
     expect(result).toEqual(mockReviewData);
   });

@@ -13,7 +13,7 @@ import {
 
 function readTokenFromOAuthCallback(): string | null {
   if (!isOAuthCallbackPath(window.location.pathname)) return null;
-  return extractOAuthToken(window.location.search);
+  return extractOAuthToken(window.location.hash);
 }
 
 function readInitialToken(): string | null {

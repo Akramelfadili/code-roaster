@@ -14,7 +14,6 @@ vi.mock('@/api/pr');
 const mockRequest = {
   prUrl: 'https://github.com/owner/repo/pull/1',
   githubToken: 'gh-token',
-  repoId: null,
 };
 
 const mockResult: ReviewData = {

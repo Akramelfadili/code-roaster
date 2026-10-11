@@ -1,111 +1,50 @@
 # Code Roaster — CLAUDE.md (Frontend)
 
 ## Stack
-React 18, TypeScript (strict), Vite, Tailwind CSS, React Query (@tanstack/react-query)
+React 19.2, TypeScript 6 (strict), Vite, Tailwind CSS v4 (`@tailwindcss/vite`), React Query (`@tanstack/react-query`), Zod
 
 ## Project Structure
 ```
 src/
-├── api/              # Raw API call functions — no hooks, no state
-│   └── review.ts
-├── hooks/            # Custom React hooks — wrap api/ with React Query
-│   └── useReview.ts
-├── components/       # UI components — dumb, presentational
-│   ├── CodeInput.tsx
-│   ├── ReviewResult.tsx
-│   └── ...
-├── types/            # All TypeScript types, interfaces, enums
-│   └── index.ts
-├── utils/            # Pure helper functions
-│   └── review.ts
-├── constants/        # Magic strings, config values
-│   └── index.ts
+├── api/              # Fetch + validate + map functions, one file per feature (review, pr, github, indexing)
+├── hooks/            # Custom hooks wrapping api/ with React Query (useReview, usePRReview, useRepoIndexer, ...)
+├── components/       # Presentational UI components
+├── types/            # Domain types, DTOs, Zod schemas — one file per feature (review, auth, indexing, errors)
+├── utils/            # Behavior: httpClient, parse*/validation, error conversion, pure helpers
+├── constants/        # Magic strings and config values — one file per feature (api, auth, errors, indexing, review)
+├── tests/            # Mirrors src/ (api/, components/, hooks/, utils/) + setup.ts — see claude-docs/testing.md
 ├── App.tsx           # Root component — layout only
 └── main.tsx
 ```
 
 ## Imports
-- Always use `@/` alias for imports — never relative paths (`../` or `./`)
-- `@` maps to `src/`. Example: `import { Foo } from '@/components/Foo'`
-
-## HTTP
-- All JSON POST requests go through `httpClient` from `@/utils/httpClient`
-- Never call `fetch` directly in API functions — use `httpClient.post<T>(endpoint, body)`
-- Error handling and JSON parsing live in `httpClient` only — never inline them
-
-## Runtime Validation
-- All API responses must be validated with a Zod schema at the API boundary — never trust `response.json() as T` past that point
-- Zod schemas live in `src/types/` next to the feature they describe (e.g. `ReviewResultSchema` in `src/types/review.ts`)
-- TypeScript types for API response shapes must be inferred from their Zod schema with `z.infer<typeof Schema>` — never hand-written as a separate `interface`/`type`
-- Use `.default([])` on array fields so a missing field fails safe instead of crashing components that `.map()` over it
-- Hooks and components never see unvalidated data — the parsing call happens before data leaves `src/api/`
-
-## API Response Mapping
-- Every API response must be mapped through a mapper function before it reaches a hook or component — raw DTO types never leave the `src/api/` layer
-- Each feature defines two shapes in `src/types/`:
-  - a `*DTO` type — the raw snake_case wire shape (for review responses, `ReviewDTO` is `z.infer<typeof ReviewResultSchema>`)
-  - a camelCase domain type (e.g. `ReviewData`) — the only shape hooks and components ever see
-- The mapper lives in `src/api/` next to the fetch functions, named `mapTo<DomainType>` (e.g. `mapToReviewData(dto: ReviewDTO): ReviewData`, `mapToGitHubUser(dto): GitHubUser`), with an explicit return type
-- API functions return the domain type: validate first (`parseReviewResult` returns the DTO), then map — `return mapToReviewData(parseReviewResult(response))`
-- One mapper per feature domain — reuse it across endpoints (both `src/api/review.ts` and `src/api/pr.ts` map through `mapToReviewData`)
-- DTO types and `*ApiResponse`/`*DTO` interfaces stay inside `src/api/` or `src/types/`; never import a DTO type into `src/hooks/` or `src/components/`
-
-## `types/` vs `utils/`
-- `src/types/` holds shape only: interfaces, enums, Zod schemas, and types inferred from them (`z.infer<...>`). Nothing in `types/` should execute logic or throw.
-- Any function that runs validation, transforms data, or converts one error type into another (e.g. a Zod `safeParse` result into an `AppError`) is behavior, not shape — it belongs in `src/utils/`, named after the feature (e.g. `parseReviewResult` in `src/utils/review.ts`), and imports the schema/types it needs from `src/types/`
-- Rule of thumb: if removing `export function` would make it a `.d.ts`-shaped file, it belongs in `types/`; if it has a body that does work, it belongs in `utils/`
+- Always use the `@/` alias (`@` → `src/`) — never relative paths (`../` or `./`). Example: `import { Foo } from '@/components/Foo'`
 
 ## TypeScript Standards
-- Strict mode always on
-- No `any` — ever. Use `unknown` and narrow it
-- All interfaces and types live in `src/types/` — never inline in components
-- Use `as const` enumeration pattern for fixed sets of values — never `Record<>` types
+- Strict mode always on; use `unknown` and narrow it
+- **Where types go:** a component's props interface lives in the component file, directly above the component. Every other type, interface, enum, and Zod schema lives in `src/types/`
+- Use the `as const` pattern for fixed sets of values — never `Record<>` types
 - Explicit return types on all functions
-- Props interfaces always explicitly defined above the component
 
 ## React Standards
-- Functional components only — no class components. Error boundaries are the one case React can't do without a class (`componentDidCatch`/`getDerivedStateFromError` have no hook equivalent) — use the `react-error-boundary` package, which wraps that class internally and exposes a functional `<ErrorBoundary>` API. Never hand-write a class component for this.
-- Always destructure props in the function signature — never reference `props.x` in the body:
+- Functional components only. For error boundaries use the `react-error-boundary` package (see `components/ErrorBoundary.tsx`) — never hand-write a class component
+- Always destructure props in the signature — never reference `props.x` in the body:
   ```typescript
-  // Good
   export function Foo({ bar, baz }: FooProps): JSX.Element { ... }
-
-  // Bad
-  export function Foo(props: FooProps): JSX.Element {
-    return <div>{props.bar}</div>
-  }
   ```
-- Return statement is always last in a component
-- Loading and error checks happen BEFORE the return statement
 - No API calls inside components — use hooks
 - No inline functions in JSX when avoidable
 - `useState` only for pure UI state (open/closed, active tab, input value)
-- One component = one responsibility
 
 ## React Query Standards
-- All server state managed by React Query — no manual useState for loading/error/data
-- API calls live in `src/api/` as plain async functions
-- Custom hooks in `src/hooks/` wrap React Query (useQuery, useMutation)
+- All server state is managed by React Query — no manual `useState` for loading/error/data
+- Custom hooks in `src/hooks/` wrap `useQuery`/`useMutation` and declare an explicit return type (e.g. `UseReviewReturn`)
 - Always handle loading, error, and empty states explicitly
-
-## Data Fetching Pattern
-```typescript
-// src/api/review.ts — plain fetch function
-export async function fetchReview(request: ReviewRequest): Promise<ReviewResponse> { ... }
-
-// src/hooks/useReview.ts — React Query hook
-export function useReview() {
-  return useMutation({ mutationFn: fetchReview })
-}
-
-// src/components/ReviewForm.tsx — component uses hook only
-const { mutate, isPending, isError } = useReview()
-```
 
 ## Component Pattern
 ```typescript
 // 1. Imports
-// 2. Types/interfaces (if component-local only, otherwise in src/types/)
+// 2. Props interface
 // 3. Constants (if component-local only)
 // 4. Helper functions
 // 5. Component function
@@ -118,154 +57,20 @@ const { mutate, isPending, isError } = useReview()
 ```
 
 ## Styling
-- Tailwind utility classes only — no custom CSS unless absolutely necessary
+- Tailwind utility classes only — no custom CSS unless absolutely necessary, no inline styles
 - Dark theme: bg-gray-950 background, gray-800 borders, blue-400 accents
 - Severity colors: green=low, yellow=medium, orange=high, red=critical
-- No inline styles
 
-## Naming Conventions
-- Components: PascalCase (`ReviewResult.tsx`)
-- Hooks: camelCase with `use` prefix (`useReview.ts`)
-- Types/Interfaces: PascalCase (`ReviewResponse`)
-- Enums: PascalCase (`Severity`)
-- Functions/variables: camelCase
-- Constants: UPPER_SNAKE_CASE
-- Boolean variables: `is`, `has`, `should` prefix (`isLoading`, `hasError`)
-
-## Testing
-
-### Stack
-Vitest + React Testing Library (RTL). Environment: `happy-dom`.
-
-### Running tests
-```bash
-npm test          # single run
-npm run test:watch  # watch mode
-```
-
-### File layout
-Mirror `src/` under `src/__tests__/`:
-```
-src/__tests__/
-├── hooks/
-│   └── useReview.test.tsx
-├── components/
-│   ├── ReviewResult.test.tsx
-│   ├── CodeInput.test.tsx
-│   └── StreamingText.test.tsx
-└── App.test.tsx
-```
-
-### Test file naming
-`<ComponentOrHook>.test.tsx` — always `.tsx` so JSX is available for wrapper components.
-
-### Test case naming
-Plain English describing the observable behaviour: `'renders score correctly'`, not `'should render score'` or `'test score'`.
-
-### Mocking API calls
-Always mock at the `@/api/` boundary — never let fetch reach the network:
-```ts
-vi.mock('@/api/review')  // hoisted automatically by Vitest
-
-vi.mocked(fetchReview).mockResolvedValue(mockResult)
-vi.mocked(streamReview).mockImplementation(async (_req, onChunk, _signal) => {
-  onChunk('streamed chunk')
-})
-```
-
-### Mocking hooks in component tests
-For App-level tests, mock the whole hook to control returned state without needing a QueryClientProvider:
-```ts
-vi.mock('@/hooks/useReview')
-vi.mocked(useReview).mockReturnValue({ ...idleState, reviewResult: mockResult })
-```
-
-### Testing async hooks with React Query
-Wrap the hook under test in a fresh `QueryClientProvider` per test to prevent state leaking between tests:
-```ts
-function createWrapper() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  })
-  return function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-  }
-}
-
-const { result } = renderHook(() => useReview(), { wrapper: createWrapper() })
-```
-
-Use `act` to start async operations and `waitFor` to poll for the resulting state:
-```ts
-act(() => { void result.current.submitReview(mockRequest) })
-await waitFor(() => expect(result.current.reviewResult).toEqual(mockResult))
-```
-
-### Setup file
-`src/test/setup.ts` — imports `@testing-library/jest-dom/vitest` for custom matchers and registers explicit `afterEach(cleanup)` (required because RTL's auto-cleanup relies on a globally available `afterEach`, which Vitest only provides when `globals: true`).
-
-### What NOT to test
-- CSS class names as the primary assertion (test behaviour, not styling)
-- Internal state variables or private implementation details
-- Snapshot tests — they break on every unrelated markup change
-- Third-party library behaviour (React Query, React itself)
-- Exact pixel dimensions or layout positions
+## Naming
+- Boolean variables use an `is`/`has`/`should` prefix (`isLoading`, `hasError`)
+- Hooks: `use` prefix, camelCase file (`useReview.ts`); components: PascalCase file (`ReviewResult.tsx`)
 
 ## Code Quality
+- Tools: ESLint (`eslint.config.js`), Prettier (`.prettierrc` — single quotes, semicolons, 88-char width), `tsc` (`tsconfig.app.json`)
+- Run via `make lint-front`, `make format-front`, `make type-front` (see root CLAUDE.md)
+- Pre-commit (root `.pre-commit-config.yaml`) runs ESLint and Prettier when files matching `^frontend/src/.*\.[tj]sx?$` are staged
+- Prefix unused function parameters with `_` to satisfy `no-unused-vars`
+- `git commit --no-verify` only when a hook is broken by an environment issue
 
-### Tools
-
-| Tool | Config file | Purpose |
-|---|---|---|
-| ESLint | `eslint.config.js` | Lint rules — TypeScript, React, hooks, accessibility, import order |
-| Prettier | `.prettierrc` | Formatting — single quotes, semicolons, 88-char print width |
-| lint-staged | `package.json` → `lint-staged` | Runs ESLint + Prettier only on staged files |
-| tsc | `tsconfig.app.json` | Type checking in strict mode |
-
-### Running manually
-
-```bash
-npm run lint            # lint src/ — exits non-zero on any error
-npm run lint:fix        # lint + auto-fix what can be fixed
-npm run format          # format src/ in place
-npm run format:check    # check formatting without writing (used in CI/pre-commit)
-npm run type-check      # tsc --noEmit — full type check, no output files
-```
-
-### Pre-commit hooks
-
-All hooks run automatically on `git commit` via `pre-commit` (configured in the repo root `.pre-commit-config.yaml`).
-
-- Frontend hooks trigger only on files matching `^frontend/src/.*\.[tj]sx?$`
-- Backend hooks (ruff, mypy, bandit) are scoped to `^(?!frontend/).*\.py$`
-
-To skip all hooks for a single commit (emergencies only):
-```bash
-git commit --no-verify -m "..."
-```
-
-### Skipping specific rules inline
-
-Disable a single ESLint rule for one line:
-```ts
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const data = response as any
-```
-
-Disable for an entire file (e.g. generated code):
-```ts
-/* eslint-disable @typescript-eslint/no-explicit-any */
-```
-
-Prefix unused function parameters with `_` to suppress `no-unused-vars`:
-```ts
-async function handler(_req: Request, res: Response): Promise<void> { ... }
-```
-
-### ESLint plugins in use
-
-- `@typescript-eslint` — no `any`, explicit return types on function declarations
-- `eslint-plugin-react` — React JSX runtime rules
-- `eslint-plugin-react-hooks` — rules-of-hooks, exhaustive-deps
-- `eslint-plugin-jsx-a11y` — accessibility checks on JSX elements
-- `eslint-plugin-import-x` — import ordering (external → internal) with newline between groups, no duplicate imports, TypeScript path alias resolution
+@claude-docs/data-layer.md
+@claude-docs/testing.md

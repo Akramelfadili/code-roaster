@@ -2,10 +2,14 @@ import {
   GITHUB_TOKEN_STORAGE_KEY,
   OAUTH_CALLBACK_PATH,
   OAUTH_TOKEN_PARAM,
+  URL_FRAGMENT_PREFIX,
 } from '@/constants/auth';
 
-export function extractOAuthToken(search: string): string | null {
-  return new URLSearchParams(search).get(OAUTH_TOKEN_PARAM);
+export function extractOAuthToken(hash: string): string | null {
+  const fragment = hash.startsWith(URL_FRAGMENT_PREFIX)
+    ? hash.slice(URL_FRAGMENT_PREFIX.length)
+    : hash;
+  return new URLSearchParams(fragment).get(OAUTH_TOKEN_PARAM);
 }
 
 export function redirectFromOAuthCallbackToHome(): void {

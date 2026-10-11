@@ -188,7 +188,7 @@ class TestReviewPrWithContext:
         )
 
         embedder.embed_query.assert_awaited_once_with(self._DIFF)
-        vector_store.search.assert_called_once_with([0.1, 0.2], 5)
+        vector_store.search.assert_awaited_once_with([0.1, 0.2], 5)
         reviewer.vector_store_factory.assert_called_once_with(SAMPLE_REPO_ID)  # type: ignore[attr-defined]
         content = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
         assert "File: app/helpers.py (lines 10-11)" in content
@@ -206,7 +206,7 @@ class TestReviewPrWithContext:
         )
 
         embedder.embed_query.assert_not_awaited()
-        vector_store.search.assert_not_called()
+        vector_store.search.assert_not_awaited()
         content = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
         assert self._DIFF in content
         assert "Relevant context" not in content
@@ -220,7 +220,7 @@ class TestReviewPrWithContext:
             self._DIFF, SAMPLE_REPO_ID, self._PR_LABEL
         )
 
-        vector_store.search.assert_called_once()
+        vector_store.search.assert_awaited_once()
         content = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
         assert self._DIFF in content
         assert "Relevant context" not in content

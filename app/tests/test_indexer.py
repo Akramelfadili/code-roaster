@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -55,7 +56,7 @@ class TestIndexRepository:
             "a.py", "def foo():\n    return 1\n", "python"
         )
         mock_embedder.embed_chunks.assert_called_once_with([_SAMPLE_CHUNK])
-        mock_vector_store.add_chunks.assert_called_once_with(
+        mock_vector_store.add_chunks.assert_awaited_once_with(
             [_SAMPLE_CHUNK], [[0.1, 0.2]]
         )
 
@@ -118,3 +119,33 @@ class TestIndexRepository:
             IndexingStage.EMBEDDING,
             IndexingStage.STORING,
         ]
+
+    async def test_reindexing_removes_stale_chunks(self, tmp_path: Path) -> None:
+        source_content = "def foo():\n    return 1\n"
+        mock_github = MagicMock(spec=GitHubService)
+        mock_github.fetch_repo_files = AsyncMock(
+            side_effect=[[("old.py", source_content)], [("new.py", source_content)]]
+        )
+        mock_chunker = MagicMock(spec=CodeChunker)
+        mock_chunker.chunk_file = MagicMock(
+            side_effect=lambda file_path, content, language: [
+                Chunk(content, file_path, 1, 2, language)
+            ]
+        )
+        mock_embedder = MagicMock(spec=Embedder)
+        mock_embedder.embed_chunks = AsyncMock(
+            side_effect=lambda chunks: [[1.0, 0.0]] * len(chunks)
+        )
+        vector_store = VectorStore("o__r", str(tmp_path))
+        indexer = RepoIndexer(
+            mock_github, mock_chunker, mock_embedder, lambda _name: vector_store
+        )
+
+        await indexer.index_repository("https://github.com/o/r", "token", "o__r")
+        await indexer.index_repository("https://github.com/o/r", "token", "o__r")
+
+        stored_file_paths = [
+            chunk.file_path
+            for chunk in await vector_store.search([1.0, 0.0], n_results=10)
+        ]
+        assert stored_file_paths == ["new.py"]

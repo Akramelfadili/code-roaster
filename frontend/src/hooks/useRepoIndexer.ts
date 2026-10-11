@@ -36,6 +36,7 @@ export function useRepoIndexer(githubToken: string | null): UseRepoIndexerReturn
 
   const {
     mutate: startIndexing,
+    reset: resetStartIndexing,
     isPending: isStartingIndexing,
     error: startIndexingError,
     data: startedJob,
@@ -56,19 +57,29 @@ export function useRepoIndexer(githubToken: string | null): UseRepoIndexerReturn
   >({
     queryKey: [INDEXING_STATUS_QUERY_KEY, repoId],
     queryFn: repoId === null ? skipToken : () => fetchIndexingStatus(repoId),
+    // A failed poll (e.g. 404 after a backend restart) keeps the last running
+    // data, so stop on error instead of polling a job that no longer exists.
     refetchInterval: (query) =>
-      isIndexingStateActive(query.state.data?.state)
+      query.state.status !== 'error' && isIndexingStateActive(query.state.data?.state)
         ? INDEXING_POLL_INTERVAL_MS
         : false,
   });
 
+  const hasPollingError = pollingError !== null;
   const indexingStatus = polledJob ?? startedJob ?? null;
-  const isIndexingActive = isIndexingStateActive(indexingStatus?.state);
+  const isIndexingActive =
+    !hasPollingError && isIndexingStateActive(indexingStatus?.state);
   const isIndexingComplete = indexingStatus?.state === IndexingJobState.Completed;
   const indexingError = startIndexingError ?? pollingError ?? null;
 
+  function resetIndexingState(): void {
+    queryClient.removeQueries({ queryKey: [INDEXING_STATUS_QUERY_KEY, repoId] });
+    resetStartIndexing();
+  }
+
   function handleSubmit(): void {
     if (!repoUrl.trim() || githubToken === null || isIndexingActive) return;
+    if (hasPollingError) resetIndexingState();
     startIndexing({ repoUrl, githubToken });
   }
 

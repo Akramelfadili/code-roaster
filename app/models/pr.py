@@ -14,7 +14,6 @@ class PullRequestRef(NamedTuple):
 class PRReviewRequest(BaseModel):
     pr_url: str
     github_token: str
-    repo_id: str | None = None
 
     @field_validator("pr_url")
     @classmethod

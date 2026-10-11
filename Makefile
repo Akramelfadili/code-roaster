@@ -44,12 +44,12 @@ lint-front: ## Oxlint on frontend/src/
 format-front: ## Prettier format check on frontend/src/
 	cd frontend && npx prettier --check src/
 
-type-front: ## TypeScript type check (tsc --noEmit)
-	cd frontend && npx tsc --noEmit
+type-front: ## TypeScript type check (tsc -b tsconfig.app.json --noEmit)
+	cd frontend && npx tsc -b tsconfig.app.json --noEmit
 
 test-front: ## Vitest suite in frontend/
 	cd frontend && npm run test
 
 # ── Combined ─────────────────────────────────────────────────────────────────
 
-check-all: lint-back type-back security-back lint-front format-front type-front ## Run all checks (no format-back — it mutates)
+check-all: lint-back type-back security-back test-back lint-front format-front type-front test-front ## Run all checks (no format-back — it mutates)

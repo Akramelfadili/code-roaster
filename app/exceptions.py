@@ -112,3 +112,8 @@ class IndexingJobNotFoundError(IndexingError):
 class IndexingAlreadyInProgressError(IndexingError):
     status_code = 409
     log_level = logging.WARNING
+
+
+class VectorStoreError(AppError):
+    status_code = 500
+    user_message: str | None = "Vector store unavailable"

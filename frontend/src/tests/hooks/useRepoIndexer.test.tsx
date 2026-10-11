@@ -152,6 +152,50 @@ describe('useRepoIndexer', () => {
     expect(result.current.indexedRepoId).toBeNull();
   });
 
+  it('stops polling and is no longer active when a status poll errors', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(startRepoIndexing).mockResolvedValue(runningJob);
+    vi.mocked(fetchIndexingStatus).mockRejectedValue(
+      new AppError(AppErrorCode.ApiError, 'Job not found', 404)
+    );
+
+    const { result } = renderAndSubmit();
+
+    await waitFor(() => expect(result.current.indexingError).toBeInstanceOf(AppError));
+    expect(result.current.isIndexingActive).toBe(false);
+    expect(result.current.indexingErrorMessage).toBe(
+      'The server returned an error. Please try again.'
+    );
+    const callsAfterError = vi.mocked(fetchIndexingStatus).mock.calls.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(INDEXING_POLL_INTERVAL_MS * 2);
+    });
+
+    expect(fetchIndexingStatus).toHaveBeenCalledTimes(callsAfterError);
+  });
+
+  it('clears the polling error and restarts indexing on retry', async () => {
+    vi.mocked(startRepoIndexing).mockResolvedValue(runningJob);
+    vi.mocked(fetchIndexingStatus).mockRejectedValueOnce(
+      new AppError(AppErrorCode.ApiError, 'Job not found', 404)
+    );
+
+    const { result } = renderAndSubmit();
+
+    await waitFor(() => expect(result.current.indexingError).toBeInstanceOf(AppError));
+    vi.mocked(fetchIndexingStatus).mockResolvedValue(runningJob);
+
+    act(() => {
+      result.current.handleSubmit();
+    });
+
+    await waitFor(() => expect(result.current.indexingError).toBeNull());
+    expect(startRepoIndexing).toHaveBeenCalledTimes(2);
+    expect(result.current.isIndexingActive).toBe(true);
+    expect(result.current.indexingStatus).toEqual(runningJob);
+  });
+
   it('reports an already-in-progress message when starting indexing returns 409', async () => {
     vi.mocked(startRepoIndexing).mockRejectedValue(
       new AppError(AppErrorCode.ApiError, 'Already indexing', 409)

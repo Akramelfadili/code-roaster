@@ -6,19 +6,28 @@ vectors `Embedder` produces for them go in, and the chunks nearest a query
 vector come back out, reconstructed from their stored content and metadata.
 """
 
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Callable, Sequence
 from typing import cast
 
 import chromadb
+from chromadb.api.models.Collection import Collection
 from chromadb.api.types import Metadata
+from chromadb.errors import ChromaError, NotFoundError
 
+from app.exceptions import VectorStoreError
 from app.services.chunker import Chunk
 
 _DEFAULT_PERSIST_DIRECTORY = "data/chroma"
 
 
 class VectorStore:
-    """Persists and searches `Chunk` embeddings in a local Chroma collection."""
+    """Persists and searches `Chunk` embeddings in a local Chroma collection.
+
+    Every public method is async: the underlying Chroma client is synchronous,
+    so each call runs in a worker thread to keep the event loop free, and any
+    Chroma failure is raised as `VectorStoreError`.
+    """
 
     def __init__(
         self,
@@ -36,12 +45,15 @@ class VectorStore:
         self._collection_name = collection_name
         self._client = chromadb.PersistentClient(path=persist_directory)
 
-    def add_chunks(self, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
+    async def add_chunks(
+        self, chunks: list[Chunk], embeddings: list[list[float]]
+    ) -> None:
         """Store chunks with their embedding vectors.
 
         Each chunk's document ID is `{file_path}:{start_line}:{end_line}`, so
         re-adding a chunk for the same file range upserts the existing record
-        instead of creating a duplicate.
+        instead of creating a duplicate. Chunks are upserted in batches no
+        larger than Chroma's maximum batch size.
 
         Args:
             chunks: Chunks to store.
@@ -50,6 +62,7 @@ class VectorStore:
 
         Raises:
             ValueError: If `chunks` and `embeddings` have different lengths.
+            VectorStoreError: If Chroma fails to store the chunks.
         """
         if len(chunks) != len(embeddings):
             raise ValueError(
@@ -58,15 +71,11 @@ class VectorStore:
             )
         if not chunks:
             return
-        collection = self._client.get_or_create_collection(self._collection_name)
-        collection.upsert(
-            ids=[self._chunk_id(chunk) for chunk in chunks],
-            embeddings=cast(list[Sequence[float] | Sequence[int]], embeddings),
-            documents=[chunk.content for chunk in chunks],
-            metadatas=[self._chunk_metadata(chunk) for chunk in chunks],
-        )
+        await self._run_in_thread(self._upsert_in_batches, chunks, embeddings)
 
-    def search(self, query_embedding: list[float], n_results: int = 5) -> list[Chunk]:
+    async def search(
+        self, query_embedding: list[float], n_results: int = 5
+    ) -> list[Chunk]:
         """Find the chunks most similar to a query vector.
 
         Args:
@@ -77,7 +86,72 @@ class VectorStore:
         Returns:
             The most similar chunks, most similar first. Empty if the
             collection has no documents.
+
+        Raises:
+            VectorStoreError: If the Chroma query fails.
         """
+        return await self._run_in_thread(self._query, query_embedding, n_results)
+
+    async def delete_collection(self) -> None:
+        """Delete all stored vectors for this collection, e.g. before re-indexing.
+
+        A no-op if the collection does not exist yet.
+
+        Raises:
+            VectorStoreError: If Chroma fails to delete the collection.
+        """
+        await self._run_in_thread(self._delete_collection_if_present)
+
+    async def collection_exists(self) -> bool:
+        """Check whether this collection exists and holds at least one document.
+
+        Raises:
+            VectorStoreError: If Chroma fails to read the collection.
+        """
+        return await self._run_in_thread(self._has_documents)
+
+    async def _run_in_thread[**P, R](
+        self, operation: Callable[P, R], *args: P.args, **kwargs: P.kwargs
+    ) -> R:
+        """Run a blocking Chroma operation off the event loop, translating failures.
+
+        Chroma signals its own failures with `ChromaError`, but input
+        validation (e.g. an oversized batch) raises a bare `ValueError`.
+        """
+        try:
+            return await asyncio.to_thread(operation, *args, **kwargs)
+        except (ChromaError, ValueError) as error:
+            raise VectorStoreError(
+                f"Vector store operation failed for collection {self._collection_name}",
+                debug_context=str(error),
+            ) from error
+
+    def _upsert_in_batches(
+        self, chunks: list[Chunk], embeddings: list[list[float]]
+    ) -> None:
+        """Upsert chunks in slices no larger than Chroma's maximum batch size."""
+        collection = self._client.get_or_create_collection(self._collection_name)
+        batch_size = self._client.get_max_batch_size()
+        for start in range(0, len(chunks), batch_size):
+            end = start + batch_size
+            self._upsert_batch(collection, chunks[start:end], embeddings[start:end])
+
+    def _upsert_batch(
+        self,
+        collection: Collection,
+        chunks: list[Chunk],
+        embeddings: list[list[float]],
+    ) -> None:
+        """Upsert one batch of chunks, which must fit within Chroma's limit."""
+        collection.upsert(
+            ids=[self._chunk_id(chunk) for chunk in chunks],
+            embeddings=cast(list[Sequence[float] | Sequence[int]], embeddings),
+            documents=[chunk.content for chunk in chunks],
+            metadatas=[self._chunk_metadata(chunk) for chunk in chunks],
+        )
+
+    def _query(self, query_embedding: list[float], n_results: int) -> list[Chunk]:
+        """Query the collection and rebuild the nearest chunks."""
         collection = self._client.get_or_create_collection(self._collection_name)
         results = collection.query(
             query_embeddings=cast(
@@ -95,21 +169,18 @@ class VectorStore:
             for document, metadata in zip(documents[0], metadatas[0], strict=True)
         ]
 
-    def delete_collection(self) -> None:
-        """Delete all stored vectors for this collection, e.g. before re-indexing.
-
-        A no-op if the collection does not exist yet.
-        """
+    def _delete_collection_if_present(self) -> None:
+        """Delete the collection, ignoring one that does not exist yet."""
         try:
             self._client.delete_collection(self._collection_name)
-        except chromadb.errors.NotFoundError:
+        except NotFoundError:
             pass
 
-    def collection_exists(self) -> bool:
-        """Check whether this collection exists and holds at least one document."""
+    def _has_documents(self) -> bool:
+        """Check whether the collection exists and is non-empty."""
         try:
             collection = self._client.get_collection(self._collection_name)
-        except chromadb.errors.NotFoundError:
+        except NotFoundError:
             return False
         return collection.count() > 0
 

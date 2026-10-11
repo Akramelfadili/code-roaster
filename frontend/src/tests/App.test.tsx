@@ -245,7 +245,7 @@ describe('App', () => {
     ).toBeInTheDocument();
   });
 
-  it('passes the indexed repo id along when submitting a PR review', async () => {
+  it('submits only the PR url and token, even when a repo is indexed', async () => {
     vi.mocked(useGitHubAuth).mockReturnValue({
       ...loggedOutAuthState,
       githubToken: 'gh-token',
@@ -268,7 +268,6 @@ describe('App', () => {
     expect(mockSubmitPRReview).toHaveBeenCalledWith({
       prUrl: 'https://github.com/owner/repo/pull/1',
       githubToken: 'gh-token',
-      repoId: 'owner__repo',
     });
   });
 
