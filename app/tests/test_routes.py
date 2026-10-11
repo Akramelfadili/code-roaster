@@ -40,6 +40,26 @@ class TestReviewStructured:
         ):
             assert field in data
 
+    async def test_findings_are_serialized_as_objects(
+        self, client: AsyncClient
+    ) -> None:
+        response = await client.post("/review/structured", json={"code": SAMPLE_CODE})
+        suggestion = response.json()["suggestions"][0]
+        assert set(suggestion) == {
+            "id",
+            "category",
+            "severity",
+            "file",
+            "line_start",
+            "line_end",
+            "title",
+            "explanation",
+            "suggestion",
+            "confidence",
+        }
+        assert suggestion["category"] == "suggestion"
+        assert suggestion["line_start"] == 1
+
     async def test_score_is_between_1_and_10(self, client: AsyncClient) -> None:
         response = await client.post("/review/structured", json={"code": SAMPLE_CODE})
         assert 1 <= response.json()["score"] <= 10

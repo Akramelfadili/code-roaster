@@ -1,7 +1,7 @@
 # Code Roaster — CLAUDE.md (Global)
 
 ## Project Overview
-AI-powered code review tool. Users either paste code directly or connect their GitHub account and submit a pull request URL — either way, they get a structured review with bugs, security issues, suggestions, and a score. Built by a full stack dev learning AI engineering.
+AI-powered code review tool. Users either paste code directly or connect their GitHub account and submit a pull request URL — either way, they get a structured review with a score and lists of findings (bugs, security issues, suggestions, positives). Each finding is a structured `Finding` object with a title, explanation, confidence and, when locatable, a file and line range — see ARCHITECTURE.md §3.7. Built by a full stack dev learning AI engineering.
 
 ## Tech Stack
 - **Backend:** Python, FastAPI, Anthropic SDK (Claude Sonnet)

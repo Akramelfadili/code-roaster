@@ -2,7 +2,7 @@
 
 > A living document. It explains **why** the system is shaped the way it is, not only what exists.
 > Conventions and step-by-step "how to" rules live in `CLAUDE.md`, `app/CLAUDE.md` and `frontend/CLAUDE.md`. This file links to them instead of repeating them.
-> Last reviewed: 2026-09-28 (branch `feature/rag-codebase-indexing`).
+> Last reviewed: 2026-10-11 (branch `feature/structured-findings`).
 
 ---
 
@@ -13,7 +13,9 @@ Code Roaster is an AI code reviewer. There are two ways in:
 - **Paste code:** submit a snippet and watch the review stream in, then get a structured result.
 - **Review a pull request:** sign in with GitHub, paste a PR URL, and the backend fetches the diff and reviews it.
 
-Either way, the output has the same structure: a **score (1–10)**, an overall **severity**, a **summary**, and lists of **bugs**, **security issues**, **suggestions** and **positives**.
+Either way, the output has the same structure: a **score (1–10)**, an overall **severity**, a **summary**, and four lists of **findings**: **bugs**, **security issues**, **suggestions** and **positives**.
+
+Each finding is a structured object, not a sentence. It has a title, an explanation, a confidence level and, when it can be located, a file and line range. That lets findings link to code, become inline PR comments, and be evaluated one by one. The full contract is in §3.7.
 
 **Who it's for:** developers who want a fast, opinionated second pair of eyes before a human review.
 
@@ -139,7 +141,7 @@ fetch → httpClient (HTTP errors → AppError) → Zod parse (DTO) → mapToRev
 
 - Each side stays idiomatic. There is no alias config on Pydantic models and no snake_case leaking into components.
 - **Hooks and components only ever see validated, mapped data.** Backend renames are absorbed in one mapper, not across the UI.
-- One mapper per domain is reused across endpoints. `/review/structured` and `/review/pr` both go through `mapToReviewData`.
+- One mapper per domain is reused across endpoints. `/review/structured` and `/review/pr` both go through `mapToReviewData`, which maps each finding with `mapToFinding`.
 
 The backend mirrors this in reverse. `CodeReviewer` returns a domain `StructuredReview`, and routes convert it with `StructuredReviewResponse.from_domain(...)`. This keeps the AI layer decoupled from the HTTP contract.
 
@@ -203,6 +205,57 @@ Details and thresholds: §5 and `app/CLAUDE.md` → *RAG Pipeline*.
 If any of these start to hurt (see §6), move to a real job queue.
 
 **Status:** `RepoIndexer` exists and is tested. No route calls it yet, and there is no `BackgroundTasks` usage in `app/` today.
+
+### 3.7 Review response contract (`/review/*`): structured `Finding` objects
+
+**Decision:** `POST /review/structured` and `POST /review/pr` return the same `StructuredReviewResponse`:
+
+| Field | Type |
+|---|---|
+| `detected_language` | `str` |
+| `summary` | `str` |
+| `severity` | `low` / `medium` / `high` / `critical` |
+| `score` | `int`, 1–10 |
+| `bugs`, `security_issues`, `suggestions`, `positives` | `list[Finding]`, possibly empty |
+
+Every item in those four lists is a `Finding` (`app/models/review.py`):
+
+| Field | Type | Set by | Notes |
+|---|---|---|---|
+| `id` | `str` (UUID4) | **Server** | Generated when the finding is built. It gives each finding a stable handle for agents, PR comments and evals. |
+| `category` | `bug` / `security` / `suggestion` / `positive` | **Server** | Derived from the list Claude submitted the finding in. |
+| `severity` | `low`…`critical`, or `null` | Claude | Left out for positives. |
+| `file` | `str` or `null` | Claude | The path as it appears in the diff. `null` for pasted snippets or findings not tied to one file. |
+| `line_start`, `line_end` | `int` ≥ 1, or `null` | Claude | New-file line numbers for a diff, snippet line numbers for pasted code. |
+| `title` | `str` | Claude | A one-line headline. Required. |
+| `explanation` | `str` | Claude | Why the finding matters. Required. |
+| `suggestion` | `str` or `null` | Claude | A concrete fix, when there is one. |
+| `confidence` | `low` / `medium` / `high` | Claude | How sure Claude is that the finding is correct. Required. |
+
+**How a finding flows through the system:**
+
+```
+submit_code_review tool call: four arrays of finding objects (no id, no category)
+   ▼  CodeReviewer: tag each item with its array's category; Finding.model_validate generates the id
+   │    invalid item (missing field, wrong type, plain string) → MalformedAIResponseError
+   ▼  StructuredReview (domain) → StructuredReviewResponse.from_domain → JSON (absent fields → null)
+   ▼  Frontend: FindingSchema (Zod) → mapToFinding → Finding { lineStart, lineEnd, … }
+   ▼  Section renders title, location (file:12-14 · file:12 · Line 3 · file), explanation
+```
+
+**Why:**
+
+- **Plain strings were a dead end.** An agent can't act on a sentence, and a sentence can't become an inline PR comment. You also can't measure recall or false-positive rates on free text. File, line range, category and confidence make each finding addressable and measurable.
+- **The server owns `id` and `category`, never Claude.** If Claude produced a category, it could contradict the list the finding sits in. If Claude produced an ID, it could be duplicated, malformed or reused across runs. Deriving both on the server makes them correct by construction. That's why the tool schema doesn't include them.
+- **Strict validation, same failure path.** Every finding goes through Pydantic, so a malformed one fails through the existing `MalformedAIResponseError` path (§3.1). It never reaches the client half-formed.
+
+**Trade-offs:**
+
+- **One invalid finding fails the whole review.** Claude has been seen omitting required tool fields (see the TODO in `reviewer.py`), so check this rate with a live test.
+- **Line numbers are inferred by Claude** and aren't checked against the diff yet. Treat them as best-effort until something validates them.
+- **The category is stored twice:** implied by the list a finding is in, and explicit on the finding. The explicit field keeps a finding self-describing once it leaves its list, for example as an agent tool result or a PR comment.
+
+Conventions: `app/CLAUDE.md` → *Review Findings*, `frontend/claude-docs/data-layer.md` → *Review Findings*.
 
 ---
 

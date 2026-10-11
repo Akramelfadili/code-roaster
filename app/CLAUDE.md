@@ -17,12 +17,12 @@ app/
 ├── README.md
 ├── models/
 │   ├── __init__.py
-│   ├── review.py        # Review request/response models
+│   ├── review.py        # Review request/response models, Finding + FindingCategory/Confidence
 │   ├── pr.py            # PullRequestRef, PR review request models
 │   └── index.py         # IndexRepoRequest, IndexingJobStatus, IndexingSummary
 ├── prompts/
 │   ├── __init__.py
-│   └── review.py        # System prompts + STRUCTURED_REVIEW_TOOL schema for CodeReviewer
+│   └── review.py        # System prompts, STRUCTURED_REVIEW_TOOL schema, ReviewToolOutput/FindingToolOutput
 ├── services/
 │   ├── __init__.py
 │   ├── reviewer.py      # CodeReviewer — all AI logic, incl. RAG-augmented PR review
@@ -76,6 +76,24 @@ app/
 - `cache_control: ephemeral` on every system prompt
 - Handle `RateLimitError` and `APIError` explicitly
 - Log input/output token usage on every call; never send more context than needed
+
+## Review Findings
+Every item in `bugs`, `security_issues`, `suggestions` and `positives` is a `Finding` (`app/models/review.py`) — never a plain string. Contract and rationale: `ARCHITECTURE.md` §3.7.
+
+| Field | Type | Set by |
+|---|---|---|
+| `id` | `str` (UUID4, `default_factory`) | Server |
+| `category` | `FindingCategory`: `bug` / `security` / `suggestion` / `positive` | Server — from the tool list the finding came in |
+| `severity` | `Severity \| None` — omitted for positives | Claude |
+| `file`, `line_start`, `line_end` | `str \| None`, `int \| None` (≥ 1) | Claude |
+| `title`, `explanation` | `str` (required) | Claude |
+| `suggestion` | `str \| None` | Claude |
+| `confidence` | `Confidence`: `low` / `medium` / `high` (required) | Claude |
+
+- **`id` and `category` are always set server-side, never by Claude.** Keep them out of `_FINDING_SCHEMA` and `FindingToolOutput`; `CodeReviewer` stamps the category from the list and `Finding` generates the ID. Never read either from tool input
+- `_FINDING_SCHEMA` (tool JSON schema) and `FindingToolOutput` (its TypedDict mirror) in `app/prompts/review.py` change together — and together with `Finding` and the frontend `FindingSchema`
+- Build findings only through `Finding.model_validate` in `CodeReviewer`. A non-object item or a `ValidationError` becomes `MalformedAIResponseError` — never let a raw `TypeError`/`ValidationError` escape
+- Adding a field: optional (`| None = None`) unless the review is useless without it — a required field Claude omits fails the whole review
 
 ## Code Quality
 - Pre-commit runs ruff (lint + format), mypy (strict) and bandit on staged `.py` files — configs live at the project root (`ruff.toml`, `mypy.ini`, `.bandit`, `.pre-commit-config.yaml`)

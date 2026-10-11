@@ -1,8 +1,48 @@
+from enum import StrEnum
 from typing import Self
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.constants import Severity
+
+
+class FindingCategory(StrEnum):
+    """Which review section a finding belongs to."""
+
+    BUG = "bug"
+    SECURITY = "security"
+    SUGGESTION = "suggestion"
+    POSITIVE = "positive"
+
+
+class Confidence(StrEnum):
+    """How sure the reviewer is that a finding is correct."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class Finding(BaseModel):
+    """One review finding, located in the code when the reviewer can pin it down.
+
+    `id` is generated server-side, so each finding has a stable handle that
+    agents, PR comments, and evals can refer to. `severity` is left unset for
+    positives; `file` and the line range are unset when the finding isn't tied
+    to a specific location.
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    category: FindingCategory
+    severity: Severity | None = None
+    file: str | None = None
+    line_start: int | None = Field(default=None, ge=1)
+    line_end: int | None = Field(default=None, ge=1)
+    title: str
+    explanation: str
+    suggestion: str | None = None
+    confidence: Confidence
 
 
 class ReviewRequest(BaseModel):
@@ -22,10 +62,10 @@ class StructuredReviewResponse(BaseModel):
     summary: str
     severity: Severity
     score: int = Field(ge=1, le=10)
-    bugs: list[str]
-    security_issues: list[str]
-    suggestions: list[str]
-    positives: list[str]
+    bugs: list[Finding]
+    security_issues: list[Finding]
+    suggestions: list[Finding]
+    positives: list[Finding]
 
     @classmethod
     def from_domain(cls, review: "StructuredReview") -> Self:
@@ -50,10 +90,10 @@ class StructuredReview:
         summary: str,
         severity: Severity,
         score: int,
-        bugs: list[str],
-        security_issues: list[str],
-        suggestions: list[str],
-        positives: list[str],
+        bugs: list[Finding],
+        security_issues: list[Finding],
+        suggestions: list[Finding],
+        positives: list[Finding],
     ) -> None:
         self.detected_language = detected_language
         self.summary = summary

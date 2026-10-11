@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fetchPRReview } from '@/api/pr';
 import { usePRReview } from '@/hooks/usePRReview';
 import { AppError, AppErrorCode } from '@/types/errors';
-import { Severity } from '@/types/review';
+import { Confidence, FindingCategory, Severity } from '@/types/review';
 import type { ReviewData } from '@/types/review';
 
 vi.mock('@/api/pr');
@@ -22,8 +22,34 @@ const mockResult: ReviewData = {
   score: 8,
   bugs: [],
   securityIssues: [],
-  suggestions: ['Add explicit return types'],
-  positives: ['Clean variable naming'],
+  suggestions: [
+    {
+      id: 'suggestion-1',
+      category: FindingCategory.Suggestion,
+      severity: null,
+      file: null,
+      lineStart: null,
+      lineEnd: null,
+      title: 'Add explicit return types',
+      explanation: 'Return types document intent.',
+      suggestion: null,
+      confidence: Confidence.High,
+    },
+  ],
+  positives: [
+    {
+      id: 'positive-1',
+      category: FindingCategory.Positive,
+      severity: null,
+      file: null,
+      lineStart: null,
+      lineEnd: null,
+      title: 'Clean variable naming',
+      explanation: 'Names describe intent.',
+      suggestion: null,
+      confidence: Confidence.High,
+    },
+  ],
 };
 
 function createWrapper() {

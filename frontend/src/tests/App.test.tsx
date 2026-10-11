@@ -10,7 +10,7 @@ import { usePRReview } from '@/hooks/usePRReview';
 import { useRepoIndexer } from '@/hooks/useRepoIndexer';
 import { useReview } from '@/hooks/useReview';
 import { AppError, AppErrorCode } from '@/types/errors';
-import { Severity } from '@/types/review';
+import { Confidence, FindingCategory, Severity } from '@/types/review';
 import type { ReviewData } from '@/types/review';
 
 vi.mock('@/hooks/useReview');
@@ -72,7 +72,20 @@ const mockResult: ReviewData = {
   bugs: [],
   securityIssues: [],
   suggestions: [],
-  positives: ['Well structured'],
+  positives: [
+    {
+      id: 'positive-1',
+      category: FindingCategory.Positive,
+      severity: null,
+      file: null,
+      lineStart: null,
+      lineEnd: null,
+      title: 'Well structured',
+      explanation: 'Responsibilities are clearly separated.',
+      suggestion: null,
+      confidence: Confidence.High,
+    },
+  ],
 };
 
 describe('App', () => {

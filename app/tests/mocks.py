@@ -1,5 +1,5 @@
 from app.models.pr import PullRequestRef
-from app.models.review import StructuredReview
+from app.models.review import Confidence, Finding, FindingCategory, StructuredReview
 from app.services.chunker import Chunk
 from app.services.indexer import IndexingResult
 
@@ -16,8 +16,27 @@ SAMPLE_STRUCTURED_REVIEW = StructuredReview(
     score=8,
     bugs=[],
     security_issues=[],
-    suggestions=["Consider adding a docstring"],
-    positives=["Good use of type hints", "Simple and correct logic"],
+    suggestions=[
+        Finding(
+            category=FindingCategory.SUGGESTION,
+            severity="low",
+            file="main.py",
+            line_start=1,
+            line_end=2,
+            title="Missing docstring",
+            explanation="The function's purpose isn't documented.",
+            suggestion="Add a one-line docstring.",
+            confidence=Confidence.HIGH,
+        )
+    ],
+    positives=[
+        Finding(
+            category=FindingCategory.POSITIVE,
+            title="Good use of type hints",
+            explanation="Parameters and return value are fully annotated.",
+            confidence=Confidence.HIGH,
+        )
+    ],
 )
 
 SAMPLE_REPO_URL = "https://github.com/Octocat/Hello-World"

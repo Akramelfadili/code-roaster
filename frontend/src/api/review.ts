@@ -1,7 +1,28 @@
 import { API_REVIEW_ENDPOINT, API_STREAM_ENDPOINT } from '@/constants/api';
-import type { ReviewData, ReviewDTO, ReviewRequest } from '@/types/review';
+import type {
+  Finding,
+  FindingDTO,
+  ReviewData,
+  ReviewDTO,
+  ReviewRequest,
+} from '@/types/review';
 import { httpClient } from '@/utils/httpClient';
 import { parseReviewResult } from '@/utils/review';
+
+export function mapToFinding(dto: FindingDTO): Finding {
+  return {
+    id: dto.id,
+    category: dto.category,
+    severity: dto.severity,
+    file: dto.file,
+    lineStart: dto.line_start,
+    lineEnd: dto.line_end,
+    title: dto.title,
+    explanation: dto.explanation,
+    suggestion: dto.suggestion,
+    confidence: dto.confidence,
+  };
+}
 
 export function mapToReviewData(dto: ReviewDTO): ReviewData {
   return {
@@ -9,10 +30,10 @@ export function mapToReviewData(dto: ReviewDTO): ReviewData {
     summary: dto.summary,
     severity: dto.severity,
     score: dto.score,
-    bugs: dto.bugs,
-    securityIssues: dto.security_issues,
-    suggestions: dto.suggestions,
-    positives: dto.positives,
+    bugs: dto.bugs.map(mapToFinding),
+    securityIssues: dto.security_issues.map(mapToFinding),
+    suggestions: dto.suggestions.map(mapToFinding),
+    positives: dto.positives.map(mapToFinding),
   };
 }
 

@@ -19,6 +19,12 @@ Flow: component → hook (`src/hooks/`) → api function (`src/api/`) → `httpC
 - One mapper per feature domain, reused across endpoints (`api/pr.ts` reuses `mapToReviewData` from `api/review.ts`)
 - Never import a DTO type into `src/hooks/` or `src/components/`
 
+## Review Findings
+- `bugs`, `securityIssues`, `suggestions` and `positives` on `ReviewData` are `Finding[]` — never `string[]`. Wire shape: `FindingSchema`/`FindingDTO`; domain shape: `Finding` (both in `src/types/review.ts`); mapper: `mapToFinding` in `src/api/review.ts`, called from `mapToReviewData`
+- Fields: `id`, `category` (`FindingCategory`), `severity` (`Severity | null`), `file`, `lineStart`, `lineEnd`, `title`, `explanation`, `suggestion`, `confidence` (`Confidence`). Optional fields arrive as `null`, so the Zod schema uses `.nullable()`, not `.optional()`
+- **`id` and `category` are always set by the backend, never by Claude or the frontend.** Use `id` as the React `key` and as the stable handle for a finding; never generate, rewrite or re-derive either client-side
+- Keep `FindingSchema` in sync with the backend `Finding` model — contract in `ARCHITECTURE.md` §3.7
+
 ## `types/` vs `utils/`
 - `src/types/` holds shape only: interfaces, enums, Zod schemas, `z.infer` types. Nothing in `types/` executes logic or throws
 - Anything that validates, transforms, or converts errors (e.g. a Zod `safeParse` result into an `AppError`) is behavior — it goes in `src/utils/`, named after the feature (`parseReviewResult` in `src/utils/review.ts`)

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { fetchReview, mapToReviewData, streamReview } from '@/api/review';
+import { fetchReview, mapToFinding, mapToReviewData, streamReview } from '@/api/review';
 import { API_REVIEW_ENDPOINT, API_STREAM_ENDPOINT } from '@/constants/api';
-import { Language, Severity } from '@/types/review';
+import { Confidence, FindingCategory, Language, Severity } from '@/types/review';
 import type { ReviewData, ReviewDTO } from '@/types/review';
 import { httpClient } from '@/utils/httpClient';
 
@@ -14,9 +14,35 @@ const mockReviewDTO: ReviewDTO = {
   severity: Severity.Low,
   score: 8,
   bugs: [],
-  security_issues: ['Hardcoded secret on line 3'],
+  security_issues: [
+    {
+      id: 'finding-1',
+      category: FindingCategory.Security,
+      severity: Severity.High,
+      file: 'app/config.py',
+      line_start: 3,
+      line_end: 4,
+      title: 'Hardcoded secret',
+      explanation: 'An API key is committed in source.',
+      suggestion: 'Load it from the environment.',
+      confidence: Confidence.High,
+    },
+  ],
   suggestions: [],
-  positives: [],
+  positives: [
+    {
+      id: 'finding-2',
+      category: FindingCategory.Positive,
+      severity: null,
+      file: null,
+      line_start: null,
+      line_end: null,
+      title: 'Clear naming',
+      explanation: 'Names describe intent.',
+      suggestion: null,
+      confidence: Confidence.Medium,
+    },
+  ],
 };
 
 const mockReviewData: ReviewData = {
@@ -25,14 +51,48 @@ const mockReviewData: ReviewData = {
   severity: Severity.Low,
   score: 8,
   bugs: [],
-  securityIssues: ['Hardcoded secret on line 3'],
+  securityIssues: [
+    {
+      id: 'finding-1',
+      category: FindingCategory.Security,
+      severity: Severity.High,
+      file: 'app/config.py',
+      lineStart: 3,
+      lineEnd: 4,
+      title: 'Hardcoded secret',
+      explanation: 'An API key is committed in source.',
+      suggestion: 'Load it from the environment.',
+      confidence: Confidence.High,
+    },
+  ],
   suggestions: [],
-  positives: [],
+  positives: [
+    {
+      id: 'finding-2',
+      category: FindingCategory.Positive,
+      severity: null,
+      file: null,
+      lineStart: null,
+      lineEnd: null,
+      title: 'Clear naming',
+      explanation: 'Names describe intent.',
+      suggestion: null,
+      confidence: Confidence.Medium,
+    },
+  ],
 };
 
 describe('mapToReviewData', () => {
   it('maps snake_case DTO fields to camelCase domain fields', () => {
     expect(mapToReviewData(mockReviewDTO)).toEqual(mockReviewData);
+  });
+});
+
+describe('mapToFinding', () => {
+  it('maps line fields to camelCase and keeps null location fields', () => {
+    expect(mapToFinding(mockReviewDTO.positives[0])).toEqual(
+      mockReviewData.positives[0]
+    );
   });
 });
 

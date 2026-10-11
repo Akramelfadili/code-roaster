@@ -4,6 +4,7 @@ from typing import cast
 
 import anthropic
 from anthropic import APIError
+from pydantic import ValidationError
 
 from app.config import settings
 from app.constants import ANTHROPIC_MAX_TOKENS, ANTHROPIC_MODEL
@@ -12,11 +13,12 @@ from app.exceptions import (
     AIProviderRateLimitError,
     MalformedAIResponseError,
 )
-from app.models.review import StructuredReview
+from app.models.review import Finding, FindingCategory, StructuredReview
 from app.prompts.review import (
     SECURITY_REVIEW_SYSTEM_PROMPT,
     STRUCTURED_REVIEW_SYSTEM_PROMPT,
     STRUCTURED_REVIEW_TOOL,
+    FindingToolOutput,
     ReviewToolOutput,
 )
 from app.services.chunker import Chunk
@@ -34,6 +36,9 @@ _RETRIEVED_CHUNK_COUNT = 5
 # (needs a live test against the real API to see if that changes compliance,
 # rather than guessing) — see conversation from 2026-07-28.
 _REQUIRED_REVIEW_FIELDS = ("summary", "severity", "score", "detected_language")
+# Finding fields the server always sets itself; dropped from tool input even if
+# Claude volunteers them, so they can never come from the model.
+_SERVER_SET_FINDING_FIELDS = frozenset({"id", "category"})
 
 
 def _format_chunk(chunk: Chunk) -> str:
@@ -49,6 +54,56 @@ def _require_review_fields(data: ReviewToolOutput) -> None:
         raise MalformedAIResponseError(
             f"Tool response missing required fields: {', '.join(missing)}"
         )
+
+
+def _to_finding(item: FindingToolOutput, category: FindingCategory) -> Finding:
+    """Validate one raw tool finding, tagging it with its list's category."""
+    # The tool input is the model's JSON, so the TypedDict shape isn't guaranteed:
+    # a plain string here would otherwise escape as a TypeError.
+    if not isinstance(item, dict):
+        raise MalformedAIResponseError(
+            "Tool response finding is not an object", debug_context=repr(item)
+        )
+    model_fields = {
+        key: value
+        for key, value in item.items()
+        if key not in _SERVER_SET_FINDING_FIELDS
+    }
+    return Finding.model_validate({**model_fields, "category": category})
+
+
+def _to_findings(
+    items: list[FindingToolOutput], category: FindingCategory
+) -> list[Finding]:
+    """Validate the tool's raw findings, tagging each with its list's category."""
+    return [_to_finding(item, category) for item in items]
+
+
+def _build_structured_review(data: ReviewToolOutput) -> StructuredReview:
+    """Turn validated tool output into the domain review.
+
+    Raises:
+        MalformedAIResponseError: If any finding fails `Finding` validation.
+    """
+    try:
+        return StructuredReview(
+            detected_language=data["detected_language"],
+            summary=data["summary"],
+            severity=data["severity"],
+            score=data["score"],
+            bugs=_to_findings(data.get("bugs", []), FindingCategory.BUG),
+            security_issues=_to_findings(
+                data.get("security_issues", []), FindingCategory.SECURITY
+            ),
+            suggestions=_to_findings(
+                data.get("suggestions", []), FindingCategory.SUGGESTION
+            ),
+            positives=_to_findings(data.get("positives", []), FindingCategory.POSITIVE),
+        )
+    except ValidationError as e:
+        raise MalformedAIResponseError(
+            "Tool response contains an invalid finding", debug_context=str(e)
+        ) from e
 
 
 class CodeReviewer:
@@ -113,16 +168,7 @@ class CodeReviewer:
             raise MalformedAIResponseError("No tool_use block in response")
         data = cast(ReviewToolOutput, tool_use_block.input)
         _require_review_fields(data)
-        return StructuredReview(
-            detected_language=data["detected_language"],
-            summary=data["summary"],
-            severity=data["severity"],
-            score=data["score"],
-            bugs=data.get("bugs", []),
-            security_issues=data.get("security_issues", []),
-            suggestions=data.get("suggestions", []),
-            positives=data.get("positives", []),
-        )
+        return _build_structured_review(data)
 
     async def review_pr_diff(self, pr_label: str, diff: str) -> StructuredReview:
         """Review a GitHub PR's diff, labeled for context (e.g. "owner/repo#1")."""

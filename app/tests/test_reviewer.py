@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID
 
 import anthropic
 import httpx
@@ -11,6 +12,7 @@ from app.exceptions import (
     AIProviderRateLimitError,
     MalformedAIResponseError,
 )
+from app.models.review import Confidence, FindingCategory, StructuredReview
 from app.services.chunker import Chunk
 from app.services.embedder import Embedder
 from app.services.reviewer import CodeReviewer
@@ -23,10 +25,34 @@ _SAMPLE_TOOL_OUTPUT = {
     "summary": "Clean, readable function with no major issues.",
     "severity": "low",
     "score": 8,
-    "bugs": [],
+    "bugs": [
+        {
+            "title": "Off-by-one in loop",
+            "explanation": "The loop skips the last element.",
+            "severity": "high",
+            "file": "app/main.py",
+            "line_start": 12,
+            "line_end": 14,
+            "suggestion": "Iterate up to len(items) inclusive of the last index.",
+            "confidence": "high",
+        }
+    ],
     "security_issues": [],
-    "suggestions": ["Consider adding a docstring"],
-    "positives": ["Good use of type hints"],
+    "suggestions": [
+        {
+            "title": "Missing docstring",
+            "explanation": "The function's purpose isn't documented.",
+            "severity": "low",
+            "confidence": "medium",
+        }
+    ],
+    "positives": [
+        {
+            "title": "Good use of type hints",
+            "explanation": "Parameters and return value are fully annotated.",
+            "confidence": "high",
+        }
+    ],
 }
 
 
@@ -64,6 +90,16 @@ class _FakeMessageStream:
 
     async def get_final_message(self) -> SimpleNamespace:
         return SimpleNamespace(usage=self._usage)
+
+
+async def _review_with_tool_output(tool_output: dict[str, Any]) -> StructuredReview:
+    mock_client = MagicMock()
+    tool_use_block = SimpleNamespace(type="tool_use", input=tool_output)
+    mock_client.messages.create = AsyncMock(
+        return_value=_make_response([tool_use_block])
+    )
+    reviewer = CodeReviewer(client=mock_client)
+    return await reviewer.review_structured(SAMPLE_CODE, "python")
 
 
 class TestBuildReviewMessage:
@@ -135,6 +171,76 @@ class TestReviewStructured:
 
         with pytest.raises(MalformedAIResponseError):
             await reviewer.review_structured(SAMPLE_CODE, "python")
+
+    async def test_findings_are_tagged_with_their_list_category(self) -> None:
+        review = await _review_with_tool_output(_SAMPLE_TOOL_OUTPUT)
+
+        assert [f.category for f in review.bugs] == [FindingCategory.BUG]
+        assert [f.category for f in review.suggestions] == [FindingCategory.SUGGESTION]
+        assert [f.category for f in review.positives] == [FindingCategory.POSITIVE]
+
+    async def test_findings_keep_location_and_detail_fields(self) -> None:
+        review = await _review_with_tool_output(_SAMPLE_TOOL_OUTPUT)
+
+        bug = review.bugs[0]
+        assert bug.title == "Off-by-one in loop"
+        assert bug.severity == "high"
+        assert (bug.file, bug.line_start, bug.line_end) == ("app/main.py", 12, 14)
+        assert bug.confidence == Confidence.HIGH
+        assert bug.suggestion is not None
+
+    async def test_optional_finding_fields_default_to_none(self) -> None:
+        review = await _review_with_tool_output(_SAMPLE_TOOL_OUTPUT)
+
+        positive = review.positives[0]
+        assert positive.severity is None
+        assert positive.file is None
+        assert positive.line_start is None
+        assert positive.suggestion is None
+
+    async def test_each_finding_gets_a_unique_uuid(self) -> None:
+        review = await _review_with_tool_output(_SAMPLE_TOOL_OUTPUT)
+
+        ids = [f.id for f in review.bugs + review.suggestions + review.positives]
+        assert len(set(ids)) == len(ids)
+        for finding_id in ids:
+            UUID(finding_id)
+
+    async def test_tool_supplied_id_and_category_are_ignored(self) -> None:
+        finding = {
+            **_SAMPLE_TOOL_OUTPUT["positives"][0],  # type: ignore[index]
+            "id": "model-chosen-id",
+            "category": "bug",
+        }
+        output = {**_SAMPLE_TOOL_OUTPUT, "positives": [finding]}
+
+        review = await _review_with_tool_output(output)
+
+        positive = review.positives[0]
+        assert positive.id != "model-chosen-id"
+        assert positive.category == FindingCategory.POSITIVE
+
+    async def test_omitted_finding_lists_default_to_empty(self) -> None:
+        output = {k: v for k, v in _SAMPLE_TOOL_OUTPUT.items() if k != "bugs"}
+
+        review = await _review_with_tool_output(output)
+
+        assert review.bugs == []
+
+    async def test_finding_missing_required_field_raises_malformed_response(
+        self,
+    ) -> None:
+        invalid_finding = {"title": "No explanation", "confidence": "high"}
+        output = {**_SAMPLE_TOOL_OUTPUT, "bugs": [invalid_finding]}
+
+        with pytest.raises(MalformedAIResponseError):
+            await _review_with_tool_output(output)
+
+    async def test_plain_string_finding_raises_malformed_response(self) -> None:
+        output = {**_SAMPLE_TOOL_OUTPUT, "suggestions": ["Add a docstring"]}
+
+        with pytest.raises(MalformedAIResponseError):
+            await _review_with_tool_output(output)
 
 
 class TestReviewPrDiff:
