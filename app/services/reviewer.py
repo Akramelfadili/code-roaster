@@ -1,5 +1,5 @@
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from typing import cast
 
 import anthropic
@@ -22,13 +22,11 @@ from app.prompts.review import (
     ReviewToolOutput,
 )
 from app.services.chunker import Chunk
-from app.services.embedder import Embedder
-from app.services.vector_store import VectorStore
+from app.services.retriever import CodeRetriever
 
 logger = logging.getLogger(__name__)
 
 _AUTO_LANGUAGE = "auto"
-_RETRIEVED_CHUNK_COUNT = 5
 # STRUCTURED_REVIEW_TOOL marks bugs/security_issues/suggestions/positives as
 # required too, but Claude has been observed to omit them despite that, so
 # they're deliberately excluded here and defaulted via `.get(..., [])` below
@@ -110,15 +108,21 @@ class CodeReviewer:
     def __init__(
         self,
         client: anthropic.AsyncAnthropic | None = None,
-        embedder: Embedder | None = None,
-        vector_store_factory: Callable[[str], VectorStore] = VectorStore,
+        retriever: CodeRetriever | None = None,
     ) -> None:
+        """Create a reviewer.
+
+        Args:
+            client: Anthropic async client. Defaults to one authenticated with
+                ``settings.anthropic_api_key``; pass a fake in tests.
+            retriever: Supplies codebase context for PR reviews. Without one,
+                `review_pr_with_context` reviews the diff alone.
+        """
         self.client = client or anthropic.AsyncAnthropic(
             api_key=settings.anthropic_api_key
         )
         self.model = ANTHROPIC_MODEL
-        self.embedder = embedder or Embedder()
-        self.vector_store_factory = vector_store_factory
+        self.retriever = retriever
 
     def _build_review_message(self, code: str, language: str) -> str:
         if language == _AUTO_LANGUAGE:
@@ -182,14 +186,13 @@ class CodeReviewer:
 
         `repo_id` must be derived server-side from a PR the caller can access,
         never taken from client input, or the review can leak another repo's code.
-        Falls back to a plain `review_pr_diff` when the repo has no index.
+        Falls back to a plain `review_pr_diff` when there is no retriever or it
+        finds no chunks. Retrieval itself is delegated to `CodeRetriever`.
         """
-        vector_store = self.vector_store_factory(repo_id)
-        if not await vector_store.collection_exists():
+        if self.retriever is None:
             return await self.review_pr_diff(pr_label, diff)
 
-        query_vector = await self.embedder.embed_query(diff)
-        chunks = await vector_store.search(query_vector, _RETRIEVED_CHUNK_COUNT)
+        chunks = await self.retriever.retrieve(repo_id, diff)
         if not chunks:
             return await self.review_pr_diff(pr_label, diff)
 

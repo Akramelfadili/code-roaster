@@ -10,7 +10,8 @@ Indexing embeds a repository's source; PR review retrieves relevant chunks as co
 | Store | `VectorStore` (`vector_store.py`) | Persistent Chroma at `data/chroma` (gitignored), one collection per repo |
 | Orchestrate | `RepoIndexer` (`indexer.py`) | Runs fetch → chunk → embed → store, reports each `IndexingStage` via `on_stage` |
 | Job | `run_indexing_job` (`indexing_jobs.py`) | `POST /index/repo` → 202 + `BackgroundTasks`; `GET /index/status/{repo_id}` |
-| Retrieve | `CodeReviewer.review_pr_with_context` (`reviewer.py`) | Embeds the diff, takes the top 5 chunks, prepends them to the review message |
+| Retrieve | `CodeRetriever.retrieve` (`retriever.py`) | Embeds the query, returns the top `k` (default 5) chunks; `[]` if the repo has no index or embedding fails |
+| Augment | `CodeReviewer.review_pr_with_context` (`reviewer.py`) | Asks `CodeRetriever` for chunks for the diff, prepends them to the review message |
 
 ## Rules
 1. **`Chunk` is the only unit passed between stages.** Extend or wrap it — never introduce a parallel "snippet"/"fragment" type
@@ -20,4 +21,6 @@ Indexing embeds a repository's source; PR review retrieves relevant chunks as co
 5. **Fetch and index agree on "supported" via `EXTENSION_TO_LANGUAGE`.** `RepoIndexer` doesn't trust `GitHubService`'s filter: unknown extensions are skipped (fail soft, no `KeyError`), as are files over `MAX_INDEXABLE_FILE_LINES`
 6. **Re-indexing is idempotent.** Vector IDs are `{file_path}:{start_line}:{end_line}`, so upserts overwrite; call `delete_collection()` before a full re-index
 7. **Sync Chroma calls never block the event loop** — they run via `asyncio.to_thread`
-8. **Context is optional.** `review_pr_with_context` falls back to `review_pr_diff` when the collection is empty or search returns no chunks. Dependencies (`embedder`, `vector_store_factory`, Voyage `client`) are constructor-injected so tests use fakes
+8. **Context is optional.** `CodeRetriever.retrieve` returns `[]` when the collection is missing/empty or the query embedding fails (logged at WARNING); `review_pr_with_context` then falls back to `review_pr_diff`, as it does when no retriever is injected. `VectorStoreError` still propagates
+9. **Retrieval never happens inside the reviewer.** `CodeReviewer` never touches `Embedder` or `VectorStore` — it receives a `CodeRetriever` and calls `retrieve`. Any new consumer of codebase context (e.g. V5 agent tools) goes through `CodeRetriever` too
+10. **One `Embedder`, explicit wiring.** `main.py`'s lifespan builds a single `Embedder` shared by `RepoIndexer` and `CodeRetriever`; both take `embedder` and `vector_store_factory` as required constructor args (no defaults), so tests inject fakes

@@ -20,6 +20,7 @@ from app.services.chunker import CodeChunker
 from app.services.embedder import Embedder
 from app.services.github import GitHubService
 from app.services.indexer import RepoIndexer
+from app.services.retriever import CodeRetriever
 from app.services.reviewer import CodeReviewer
 from app.services.vector_store import VectorStore
 
@@ -33,17 +34,21 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    app.state.reviewer = CodeReviewer()
     app.state.github_service = GitHubService(
         client_id=settings.github_client_id,
         client_secret=settings.github_client_secret,
     )
+    embedder = Embedder()
     app.state.indexer = RepoIndexer(
         github_service=app.state.github_service,
         chunker=CodeChunker(),
-        embedder=Embedder(),
+        embedder=embedder,
         vector_store_factory=VectorStore,
     )
+    app.state.retriever = CodeRetriever(
+        embedder=embedder, vector_store_factory=VectorStore
+    )
+    app.state.reviewer = CodeReviewer(retriever=app.state.retriever)
     indexing_jobs: dict[str, IndexingJobStatus] = {}
     app.state.indexing_jobs = indexing_jobs
     yield

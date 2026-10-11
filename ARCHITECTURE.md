@@ -167,9 +167,9 @@ PR reviews use only the structured call, because diffs are reviewed as a batch.
 
 An `AbortController` cancels an in-flight stream when a new review is submitted.
 
-### 3.5 RAG pipeline design (chunker → embedder → vector store → indexer)
+### 3.5 RAG pipeline design (chunker → embedder → vector store → indexer / retriever)
 
-**Decision:** four single-responsibility services, each wrapping one concern, plus an orchestrator. All of them exchange one type, `Chunk` (a frozen dataclass: `content`, `file_path`, `start_line`, `end_line`, `language`).
+**Decision:** four single-responsibility services, each wrapping one concern, plus an orchestrator for each phase: `RepoIndexer` writes the index, `CodeRetriever` reads it. All of them exchange one type, `Chunk` (a frozen dataclass: `content`, `file_path`, `start_line`, `end_line`, `language`).
 
 | Stage | Service | Responsibility |
 |---|---|---|
@@ -178,12 +178,14 @@ An `AbortController` cancels an in-flight stream when a new review is submitted.
 | Embed | `Embedder` | Chunks → `voyage-code-3` vectors, in batches of 128 |
 | Store | `VectorStore` | Upsert into and search a per-repo Chroma collection |
 | Orchestrate | `RepoIndexer` | Run fetch → chunk → embed → store and return an `IndexingResult` |
+| Retrieve | `CodeRetriever` | Embed a query and return the top `k` chunks from a repo's collection; `[]` when there is no index or embedding fails |
 
 **Why:**
 
 - **Each stage is swappable and testable in isolation.** The external clients (Voyage, Chroma, `httpx`) are injected, so tests never hit the network. Replacing Chroma with a hosted store, or regex chunking with tree-sitter, touches one file.
 - **One shared data type** means no adapters between stages. The rule is: extend `Chunk`, never add a parallel "snippet" type.
-- **`RepoIndexer` takes every dependency explicitly** (no defaults), so the pipeline is assembled in one visible place.
+- **`RepoIndexer` and `CodeRetriever` take every dependency explicitly** (no defaults), so the pipeline is assembled in one visible place (the `lifespan`), with one shared `Embedder`.
+- **Retrieval is never done inside the reviewer.** `CodeReviewer` receives an optional `CodeRetriever` and only consumes its chunks; it never touches `Embedder` or `VectorStore`. This keeps the reviewer to one job (calling the LLM) and makes retrieval a standalone callable, which V5 agents need as a tool (§6).
 - **Definition-aligned chunks** (≤100 lines; fallback of 50-line windows with 10 lines of overlap; chunks under 5 lines dropped) keep each retrieved result a coherent unit, such as a function or class, not an arbitrary slice.
 
 Details and thresholds: §5 and `app/CLAUDE.md` → *RAG Pipeline*.
@@ -268,23 +270,26 @@ main.py (lifespan: builds singletons on app.state; the AppError handler and the 
 │
 ├── routes/review.py   POST /review/stream       ─┐
 │                      POST /review/structured    ├─▶ CodeReviewer ──────▶ Anthropic API
-├── routes/pr.py       POST /review/pr           ─┤        ▲
+├── routes/pr.py       POST /review/pr           ─┘        │
+│                        │                                 └─▶ CodeRetriever ─▶ Embedder ─▶ Voyage AI
+│                        │                                                   ─▶ VectorStore ─▶ Chroma
 │                        └─ GitHubService.parse_pr_url / fetch_pr_diff ──▶ GitHub REST API
 ├── routes/auth.py     GET  /auth/github          ─┐
 │                      GET  /auth/github/callback ─┴▶ GitHubService.exchange_code_for_token
 └── routes/health.py   GET  /health
 
-(not yet routed)  RepoIndexer ─▶ GitHubService.fetch_repo_files ─▶ GitHub
-                              ─▶ CodeChunker (pure)
-                              ─▶ Embedder ─────────────────────────▶ Voyage AI
-                              ─▶ VectorStore ──────────────────────▶ Chroma (disk)
+routes/index.py  POST /index/repo ─▶ run_indexing_job ─▶ RepoIndexer
+                                      ─▶ GitHubService.fetch_repo_files ─▶ GitHub
+                                      ─▶ CodeChunker (pure)
+                                      ─▶ Embedder (shared with CodeRetriever) ─▶ Voyage AI
+                                      ─▶ VectorStore ─▶ Chroma (disk)
 ```
 
 **Layering rules:**
 
 - **Routes are thin.** They validate input through Pydantic models (`field_validator`), call services from `req.app.state`, and map the result to a response model. Routes contain no business logic, no `httpx`, and no `try`/`except`.
 - **Services own every external call.** Anthropic, GitHub and Voyage are all wrapped in `app/services/`. Services translate failures into `AppError` subclasses and log token usage.
-- **Singletons are created in the `lifespan`.** `CodeReviewer` and `GitHubService` live on `app.state`, so tests replace them with `MagicMock(spec=...)` without patching imports.
+- **Singletons are created in the `lifespan`.** `CodeReviewer`, `CodeRetriever`, `RepoIndexer` and `GitHubService` live on `app.state`; one `Embedder` is shared by the indexer and the retriever. Tests replace them with `MagicMock(spec=...)` without patching imports.
 - **Prompts and tool schemas** (`app/prompts/review.py`) are kept apart from the code that calls the model.
 - **Constants** (`app/constants.py`) are the single source for model IDs, severities, and the extension-to-language map shared by fetch and index.
 
@@ -346,12 +351,14 @@ IndexingResult(files_processed, chunks_created, chunks_stored, duration_seconds)
 - **Supported languages:** Python, TypeScript, JavaScript, Go, Rust, Java.
 - **Re-indexing:** call `VectorStore.delete_collection()` first to drop chunks from deleted or renamed files. Upserts alone only overwrite matching IDs.
 
-### 5.2 Retrieval phase *(building blocks exist; not yet used by reviews)*
+### 5.2 Retrieval phase *(implemented in `CodeRetriever`; used by `/review/pr`)*
 
 ```
 review request (snippet or PR diff)
-   ▼  Embedder.embed_query          voyage-code-3, input_type="query"
-   ▼  VectorStore.search(n=5)       nearest chunks, most similar first → list[Chunk]
+   ▼  CodeRetriever.retrieve(repo_id, query, k=5)
+   │    VectorStore.collection_exists  no index → []
+   │    Embedder.embed_query           voyage-code-3, input_type="query"; failure → logged, []
+   │    VectorStore.search(k)          nearest chunks, most similar first → list[Chunk]
    ▼  CodeReviewer                  retrieved chunks injected as labelled context
                                     (file_path:start–end) alongside the code under review
 ```

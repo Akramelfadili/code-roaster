@@ -25,13 +25,14 @@ app/
 │   └── review.py        # System prompts, STRUCTURED_REVIEW_TOOL schema, ReviewToolOutput/FindingToolOutput
 ├── services/
 │   ├── __init__.py
-│   ├── reviewer.py      # CodeReviewer — all AI logic, incl. RAG-augmented PR review
+│   ├── reviewer.py      # CodeReviewer — all LLM calls; PR review consumes context from CodeRetriever
 │   ├── github.py        # GitHubService — OAuth token exchange, PR URL parsing, diff fetch, repo file fetch
 │   ├── github_errors.py # raise_for_github_response, is_rate_limited
 │   ├── chunker.py       # CodeChunker + Chunk — splits source files for the RAG pipeline
 │   ├── embedder.py      # Embedder — Chunks → vectors via Voyage AI
 │   ├── vector_store.py  # VectorStore — persists and searches embeddings via Chroma
 │   ├── indexer.py       # RepoIndexer + IndexingResult — fetch → chunk → embed → store
+│   ├── retriever.py     # CodeRetriever — query → embed → search; the only place retrieval happens
 │   └── indexing_jobs.py # run_indexing_job — background wrapper recording job progress/outcome
 ├── routes/
 │   ├── __init__.py
