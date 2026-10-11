@@ -2,7 +2,7 @@
 
 > A living document. It explains **why** the system is shaped the way it is, not only what exists.
 > Conventions and step-by-step "how to" rules live in `CLAUDE.md`, `app/CLAUDE.md` and `frontend/CLAUDE.md`. This file links to them instead of repeating them.
-> Last reviewed: 2026-10-11 (branch `feature/structured-findings`).
+> Last reviewed: 2026-10-11 (branch `refactor/extract-code-retriever`).
 
 ---
 
@@ -29,8 +29,8 @@ Each finding is a structured object, not a sentence. It has a title, an explanat
 │                      │  JSON/text │                      │ ──▶ │ Voyage AI        │
 └──────────┬───────────┘            └──────────┬───────────┘     └──────────────────┘
            │ GET /user (direct)                │
-           ▼                                   ▼
-     api.github.com                     Chroma (data/chroma, on disk)
+           ▼                                   ├──▶ Chroma (data/chroma, on disk)
+     api.github.com                            └──▶ Postgres (job state, via SQLAlchemy async)
 ```
 
 ---
@@ -44,6 +44,7 @@ Each finding is a structured object, not a sentence. It has a title, an explanat
 | **Python 3.12** | Python has the best AI/ML SDKs, and Anthropic, Voyage and Chroma all ship first-class Python clients. 3.12 gives modern typing (`Self`, `X \| None`, `type` aliases), which mypy strict mode relies on. |
 | **FastAPI** | It is async-native, and nearly all of our work is waiting on I/O (LLM calls, GitHub, embeddings). Pydantic v2 validation is built in, so request contracts live in models and not in route bodies. `StreamingResponse` makes token streaming trivial. OpenAPI docs come for free at `/docs`. |
 | **Anthropic SDK (`AsyncAnthropic`)** | Official client with typed streaming (`messages.stream`), tool use, prompt caching and typed errors (`RateLimitError`, `APIError`), which we map to domain exceptions. We use the async client only, so a slow review never blocks the event loop. |
+| **Postgres + SQLAlchemy 2 (async, `asyncpg`) + Alembic** | Durable, shared home for job state (§3.8). Postgres is the default relational choice and its partial unique indexes enforce "one active job per repo" in the database itself. SQLAlchemy's async engine keeps DB I/O off the event loop like every other call; Alembic versions the schema. |
 | **httpx (`AsyncClient`)** | Used for every outbound HTTP call. Its `MockTransport` lets service tests run without the network. |
 | **conda** | One reproducible env (`code-roaster`) for runtime, lint, type and test tools. |
 
@@ -74,13 +75,13 @@ Each finding is a structured object, not a sentence. It has a title, an explanat
 
 **How it works:**
 
-1. `GET /auth/github` redirects to GitHub.
-2. The callback exchanges the code for a token server-side, so the client secret never reaches the browser.
-3. The backend redirects to `{frontend_url}/auth/callback?token=…`.
-4. The SPA stores the token in `sessionStorage` and strips it from the URL.
+1. `GET /auth/github` generates a random `state`, stores it in a short-lived HttpOnly cookie scoped to `/auth/github`, and redirects to GitHub with it.
+2. The callback rejects the request (401) unless the returned `state` matches the cookie, which blocks login CSRF. It then exchanges the code for a token server-side, so the client secret never reaches the browser.
+3. The backend redirects to `{frontend_url}/auth/callback#token=…`. Browsers never send the fragment to a server, so the token stays out of server logs and `Referer` headers.
+4. The SPA reads the token from the fragment, stores it in `sessionStorage`, and strips it from the URL.
 5. The token is sent in the request body for each PR review.
 
-**Trade-off:** the backend is **stateless**, with no sessions or database, but the token passes through a URL and lives in browser storage. That is acceptable for local and dev use. Revisit it for deployment (see §6).
+**Trade-off:** the backend is **stateless**, with no sessions or database (the state cookie is the only server-issued state, and it lives in the browser), but the token passes through a URL fragment and lives in browser storage. That is acceptable for local and dev use. Revisit it for deployment (see §6).
 
 ---
 
@@ -96,11 +97,12 @@ AppError
 │   ├── AIProviderError            502 (hidden message)
 │   │   └── AIProviderRateLimitError  429
 │   └── MalformedAIResponseError   500 (hidden message)
-└── GitHubError                    502 (hidden message)
-    ├── InvalidPRUrlError / InvalidRepoUrlError   400
-    ├── GitHubAuthError                           401
-    ├── PRNotFoundError / RepoNotFoundError       404
-    └── GitHubRateLimitError                      429
+├── GitHubError                    502 (hidden message)
+│   ├── InvalidPRUrlError / InvalidRepoUrlError   400
+│   ├── GitHubAuthError                           401
+│   ├── PRNotFoundError / RepoNotFoundError       404
+│   └── GitHubRateLimitError                      429
+└── VectorStoreError               500 (hidden message)
 ```
 
 **Why:**
@@ -120,7 +122,7 @@ Full rules: `app/CLAUDE.md` → *Error Handling*.
 
 **Why:**
 
-- **Fail at import, not at first use.** Required keys (`anthropic_api_key`, `voyage_api_key`, `github_client_id`, `github_client_secret`) have no defaults, so a missing one stops the app at startup with a clear validation error. Without this, it would surface later as a 500 halfway through a review.
+- **Fail at import, not at first use.** Required keys (`anthropic_api_key`, `voyage_api_key`, `github_client_id`, `github_client_secret`, `database_url`) have no defaults, so a missing one stops the app at startup with a clear validation error. Without this, it would surface later as a 500 halfway through a review.
 - **One inventory of config.** Values are typed and discoverable in one place. `.env.example` documents them.
 
 ### 3.3 DTO mapping layer (snake_case wire → camelCase domain)
@@ -190,23 +192,21 @@ An `AbortController` cancels an in-flight stream when a new review is submitted.
 
 Details and thresholds: §5 and `app/CLAUDE.md` → *RAG Pipeline*.
 
-### 3.6 Background tasks for indexing *(decided, not yet wired)*
+### 3.6 Background tasks for indexing
 
-**Decision:** indexing will be started by an endpoint that returns immediately and runs `RepoIndexer.index_repository` as a **background task**.
+**Decision:** `POST /index/repo` returns `202` immediately and runs `RepoIndexer.index_repository` as a **background task** (`run_indexing_job`). Clients poll `GET /index/status/{repo_id}`.
 
 **Why:** indexing a repo means many GitHub requests, one embedding request per 128 chunks, and disk writes. That takes anywhere from seconds to minutes, which is far beyond what an HTTP request should hold open. Blocking would cause proxy timeouts, a frozen UI, and a lost result if the client disconnects.
 
-**Starting point:** FastAPI's `BackgroundTasks`, which runs in-process after the response is sent and needs no extra infrastructure.
+**Starting point:** FastAPI's `BackgroundTasks`, which runs in-process after the response is sent and needs no extra infrastructure. Job **state** is persisted in Postgres (§3.8); only the **execution** is in-process.
 
 **Known limits:**
 
-- No persistence. A server restart loses in-flight jobs.
-- No built-in progress reporting. The client will need a status or poll endpoint, which can use `VectorStore.collection_exists`.
+- A restart kills in-flight jobs. On startup, `fail_orphaned_indexing_jobs` marks every `pending`/`running` job not updated for `INDEXING_JOB_TIMEOUT_SECONDS` (30 min) as `failed` with `error = "Server restarted"`, so the repo can be re-indexed. The timeout keeps a restarting worker from sweeping a job still alive on another worker. The cost: a repo whose job was killed stays blocked (`409`) for up to 30 minutes after the restart.
+- `updated_at` only moves when a stage starts, so a single stage running longer than the timeout would be swept by a restarting worker. The swept job's runner would still write `completed` over the `failed` when it finishes.
 - Jobs share the web worker's resources.
 
-If any of these start to hurt (see §6), move to a real job queue.
-
-**Status:** `RepoIndexer` exists and is tested. No route calls it yet, and there is no `BackgroundTasks` usage in `app/` today.
+If these start to hurt (see §6), move execution to a real job queue; the `indexing_jobs` table stays as is.
 
 ### 3.7 Review response contract (`/review/*`): structured `Finding` objects
 
@@ -259,6 +259,31 @@ submit_code_review tool call: four arrays of finding objects (no id, no category
 
 Conventions: `app/CLAUDE.md` → *Review Findings*, `frontend/claude-docs/data-layer.md` → *Review Findings*.
 
+### 3.8 Postgres for all job state (SQLAlchemy async + Alembic)
+
+**Decision:** every piece of job state — indexing jobs today, agent runs in V5 — lives in **Postgres**, **never in process memory** (`app.state`, module globals, caches). Each job is a row; services read and write it through an `AsyncSession`.
+
+**Why:**
+
+- **Survives restarts.** The previous `dict` on `app.state` lost every job's status on reload.
+- **Works with more than one worker.** Every process sees the same rows. The rule "one active indexing job per repo" is a partial unique index (`uq_indexing_jobs_active_repo_id`), so two workers racing on one repo can't both start it — the loser's `INSERT` fails and becomes a `409`.
+- **History for free.** Re-indexing adds a row instead of overwriting one; the status endpoint returns the newest.
+- **One pattern for V5.** Agent runs need the same create → update progress → record outcome lifecycle.
+
+**How it is wired:**
+
+- `app/database.py` owns the async engine, `SessionFactory`, `Base` and the `get_db` dependency (`DbSession`). ORM tables live in `app/models/db/`, apart from the Pydantic API models, and services map rows to response models.
+- The `lifespan` calls `init_db()` and puts `SessionFactory` on `app.state.session_factory`. Background tasks receive it explicitly and open their own short sessions, because the request's session is closed by the time they run.
+- **Schema:** startup runs `alembic upgrade head` in every environment, so a database is always exactly what the migrations define. There is no `create_all` shortcut, because it never alters existing tables and silently drifts from the migrations. Migrations live in `app/migrations/versions/`.
+- **Orphaned jobs:** right after migrating, the lifespan calls `fail_orphaned_indexing_jobs` (§3.6).
+
+**Trade-offs:**
+
+- A Postgres server is now required to run the backend, and to run the indexing route tests (`TEST_DATABASE_URL`).
+- Every model change needs a migration before the app will see it, including in development.
+
+Conventions: `app/CLAUDE.md` → *Database*.
+
 ---
 
 ## 4. System Components
@@ -278,18 +303,21 @@ main.py (lifespan: builds singletons on app.state; the AppError handler and the 
 │                      GET  /auth/github/callback ─┴▶ GitHubService.exchange_code_for_token
 └── routes/health.py   GET  /health
 
-routes/index.py  POST /index/repo ─▶ run_indexing_job ─▶ RepoIndexer
-                                      ─▶ GitHubService.fetch_repo_files ─▶ GitHub
-                                      ─▶ CodeChunker (pure)
-                                      ─▶ Embedder (shared with CodeRetriever) ─▶ Voyage AI
-                                      ─▶ VectorStore ─▶ Chroma (disk)
+routes/index.py  POST /index/repo        ─▶ create_indexing_job ─────▶ Postgres (indexing_jobs)
+                 GET  /index/status/{id} ─▶ get_latest_indexing_job ─▶ Postgres
+                 (background)            ─▶ run_indexing_job ─▶ Postgres (progress, outcome)
+                                                             ─▶ RepoIndexer
+                                                                ─▶ GitHubService.fetch_repo_files ─▶ GitHub
+                                                                ─▶ CodeChunker (pure)
+                                                                ─▶ Embedder (shared with CodeRetriever) ─▶ Voyage AI
+                                                                ─▶ VectorStore ─▶ Chroma (disk)
 ```
 
 **Layering rules:**
 
 - **Routes are thin.** They validate input through Pydantic models (`field_validator`), call services from `req.app.state`, and map the result to a response model. Routes contain no business logic, no `httpx`, and no `try`/`except`.
 - **Services own every external call.** Anthropic, GitHub and Voyage are all wrapped in `app/services/`. Services translate failures into `AppError` subclasses and log token usage.
-- **Singletons are created in the `lifespan`.** `CodeReviewer`, `CodeRetriever`, `RepoIndexer` and `GitHubService` live on `app.state`; one `Embedder` is shared by the indexer and the retriever. Tests replace them with `MagicMock(spec=...)` without patching imports.
+- **Singletons are created in the `lifespan`.** `CodeReviewer`, `CodeRetriever`, `RepoIndexer`, `GitHubService` and the DB `session_factory` live on `app.state` (services and factories only — never job state, see §3.8); one `Embedder` is shared by the indexer and the retriever. Tests replace them with `MagicMock(spec=...)` without patching imports.
 - **Prompts and tool schemas** (`app/prompts/review.py`) are kept apart from the code that calls the model.
 - **Constants** (`app/constants.py`) are the single source for model IDs, severities, and the extension-to-language map shared by fetch and index.
 
@@ -325,7 +353,7 @@ App.tsx (layout + mode tabs)
 
 **Goal:** give the reviewer knowledge of the repository beyond the diff or snippet, such as how a changed function is called, what conventions the codebase follows, and which helpers already exist. Reviews can then flag misuse and duplication, not only local bugs.
 
-### 5.1 Index phase *(implemented; entry point not yet exposed)*
+### 5.1 Index phase *(implemented; exposed via `POST /index/repo`)*
 
 ```
 repo_url + github_token
@@ -341,15 +369,19 @@ repo_url + github_token
    │    drop chunks < 5 lines
    ▼  Embedder.embed_chunks
    │    voyage-code-3, input_type="document", batches of 128
+   ▼  VectorStore.delete_collection
+   │    drop the previous run's chunks
    ▼  VectorStore.add_chunks
-        Chroma collection per repo; id = "{file_path}:{start_line}:{end_line}" (upsert → idempotent re-index)
+        Chroma collection per repo; id = "{file_path}:{start_line}:{end_line}"
+        upserted in batches of client.get_max_batch_size()
         metadata: file_path, start_line, end_line, language
    ▼
 IndexingResult(files_processed, chunks_created, chunks_stored, duration_seconds)
 ```
 
 - **Supported languages:** Python, TypeScript, JavaScript, Go, Rust, Java.
-- **Re-indexing:** call `VectorStore.delete_collection()` first to drop chunks from deleted or renamed files. Upserts alone only overwrite matching IDs.
+- **Re-indexing:** `RepoIndexer` calls `VectorStore.delete_collection()` at the start of the store stage, so chunks from deleted or renamed files don't linger. Upserts alone would only overwrite matching IDs.
+- **Chroma calls:** the Chroma client is synchronous, so every `VectorStore` call runs in `asyncio.to_thread`. Chroma failures, including its bare `ValueError` on an oversized batch, are raised as `VectorStoreError`.
 
 ### 5.2 Retrieval phase *(implemented in `CodeRetriever`; used by `/review/pr`)*
 
@@ -383,7 +415,7 @@ Still open:
 |---|---|---|
 | **V4 (in progress)** | RAG codebase indexing: an indexing endpoint using background tasks (§3.6) and retrieval-augmented reviews (§5.2). | New routes; `RepoIndexer`, `Embedder` and `VectorStore` wired into `lifespan`; the review prompt gains a context section. |
 | **V5: Agents** | The reviewer moves from single-shot calls to an agent loop that decides for itself what to inspect, using tools such as search the index, read a file, or fetch related PRs. | `CodeReviewer` evolves into a tool-using agent. The RAG services become agent tools. Error handling and token logging must cover multi-step runs. |
-| **V6: Deployment** | Production hosting. | Revisit: token transport and storage (§2 Auth); moving Chroma from local disk to a hosted vector store; moving `BackgroundTasks` to a durable job queue; CORS and `frontend_url` per environment; secrets management beyond `.env`. |
+| **V6: Deployment** | Production hosting. | Revisit: token transport and storage (§2 Auth); moving Chroma from local disk to a hosted vector store; moving `BackgroundTasks` to a durable job queue with heartbeats (job state is already in Postgres, §3.8; it would replace the timeout-based orphan sweep, §3.6); CORS and `frontend_url` per environment; secrets management beyond `.env`. |
 
 ---
 

@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     github_client_id: str
     github_client_secret: str
     frontend_url: str = "http://localhost:5173"
+    database_url: str
+    test_database_url: str | None = None
 
 
 settings = Settings()

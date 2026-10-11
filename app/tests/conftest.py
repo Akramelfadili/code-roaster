@@ -4,9 +4,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
+from app.config import settings
+from app.database import Base
 from app.main import app
-from app.models import IndexingJobStatus
 from app.services.github import GitHubService
 from app.services.indexer import RepoIndexer
 from app.services.reviewer import CodeReviewer
@@ -52,9 +55,25 @@ def mock_indexer() -> MagicMock:
     return indexer
 
 
-@pytest.fixture
-def indexing_jobs() -> dict[str, IndexingJobStatus]:
-    return {}
+@pytest_asyncio.fixture
+async def db_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """Session factory on a freshly reset test database, set on `app.state`.
+
+    Skips the test when `TEST_DATABASE_URL` is unset. Every table is dropped
+    and recreated first, so never point it at a database you care about.
+    """
+    if settings.test_database_url is None:
+        pytest.skip("TEST_DATABASE_URL is not set — see app/claude-docs/testing.md")
+    # NullPool: pytest-asyncio gives each test its own event loop, and pooled
+    # asyncpg connections can't be reused across loops.
+    engine = create_async_engine(settings.test_database_url, poolclass=NullPool)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.drop_all)
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    app.state.session_factory = session_factory
+    yield session_factory
+    await engine.dispose()
 
 
 @pytest_asyncio.fixture
@@ -62,13 +81,11 @@ async def client(
     mock_reviewer: MagicMock,
     mock_github_service: MagicMock,
     mock_indexer: MagicMock,
-    indexing_jobs: dict[str, IndexingJobStatus],
 ) -> AsyncIterator[AsyncClient]:
     # ASGITransport does not trigger the lifespan, so we set app.state directly.
     app.state.reviewer = mock_reviewer
     app.state.github_service = mock_github_service
     app.state.indexer = mock_indexer
-    app.state.indexing_jobs = indexing_jobs
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as ac:

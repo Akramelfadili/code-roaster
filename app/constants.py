@@ -50,3 +50,11 @@ class IndexingJobState(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+# An indexing job still pending or running at startup whose row hasn't been
+# updated for this long is assumed orphaned by a restart and marked failed.
+# Kept well above the longest gap between stage updates, so a job still
+# running on another worker isn't swept.
+INDEXING_JOB_TIMEOUT_SECONDS = 30 * 60
+INDEXING_JOB_ORPHANED_ERROR = "Server restarted"

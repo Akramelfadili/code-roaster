@@ -9,8 +9,8 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.constants import INTERNAL_SERVER_ERROR_MESSAGE
+from app.database import SessionFactory, engine, init_db
 from app.exceptions import AppError
-from app.models import IndexingJobStatus
 from app.routes.auth import router as auth_router
 from app.routes.health import router as health_router
 from app.routes.index import router as index_router
@@ -20,6 +20,7 @@ from app.services.chunker import CodeChunker
 from app.services.embedder import Embedder
 from app.services.github import GitHubService
 from app.services.indexer import RepoIndexer
+from app.services.indexing_jobs import fail_orphaned_indexing_jobs
 from app.services.retriever import CodeRetriever
 from app.services.reviewer import CodeReviewer
 from app.services.vector_store import VectorStore
@@ -34,6 +35,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    await init_db()
+    app.state.session_factory = SessionFactory
+    orphaned_repo_ids = await fail_orphaned_indexing_jobs(SessionFactory)
+    if orphaned_repo_ids:
+        logger.warning(
+            f"Marked {len(orphaned_repo_ids)} orphaned indexing job(s) as failed: "
+            f"{', '.join(orphaned_repo_ids)}"
+        )
     app.state.github_service = GitHubService(
         client_id=settings.github_client_id,
         client_secret=settings.github_client_secret,
@@ -49,9 +58,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         embedder=embedder, vector_store_factory=VectorStore
     )
     app.state.reviewer = CodeReviewer(retriever=app.state.retriever)
-    indexing_jobs: dict[str, IndexingJobStatus] = {}
-    app.state.indexing_jobs = indexing_jobs
     yield
+    await engine.dispose()
 
 
 app = FastAPI(

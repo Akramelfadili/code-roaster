@@ -1,12 +1,16 @@
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.constants import IndexingJobState, IndexingStage
 from app.exceptions import InvalidRepoUrlError, RepoNotFoundError
-from app.models import IndexingJobStatus
+from app.models.db import IndexingJob
 from app.tests.mocks import SAMPLE_REPO_ID, SAMPLE_REPO_URL
+
+pytestmark = pytest.mark.usefixtures("db_session_factory")
 
 _INDEX_REQUEST = {"repo_url": SAMPLE_REPO_URL, "github_token": "gh-token"}
 
@@ -45,13 +49,19 @@ class TestIndexRepo:
         assert response.status_code == 400
 
     async def test_job_already_running_returns_409(
-        self, client: AsyncClient, indexing_jobs: dict[str, IndexingJobStatus]
+        self,
+        client: AsyncClient,
+        db_session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
-        indexing_jobs[SAMPLE_REPO_ID] = IndexingJobStatus(
-            repo_id=SAMPLE_REPO_ID,
-            repo_url=SAMPLE_REPO_URL,
-            state=IndexingJobState.RUNNING,
-        )
+        async with db_session_factory() as session:
+            session.add(
+                IndexingJob(
+                    repo_id=SAMPLE_REPO_ID,
+                    repo_url=SAMPLE_REPO_URL,
+                    state=IndexingJobState.RUNNING,
+                )
+            )
+            await session.commit()
         response = await client.post("/index/repo", json=_INDEX_REQUEST)
         assert response.status_code == 409
 
@@ -85,9 +95,9 @@ class TestIndexStatus:
             repo_url: str,
             github_token: str,
             collection_name: str,
-            on_stage: Callable[[IndexingStage], None],
+            on_stage: Callable[[IndexingStage], Awaitable[None]],
         ) -> None:
-            on_stage(IndexingStage.FETCHING)
+            await on_stage(IndexingStage.FETCHING)
             raise RepoNotFoundError("Repository not found")
 
         mock_indexer.index_repository = AsyncMock(side_effect=fail_while_fetching)

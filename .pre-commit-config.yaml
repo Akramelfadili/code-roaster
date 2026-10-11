@@ -32,6 +32,8 @@ repos:
           - httpx
           - voyageai>=0.5.0
           - chromadb>=1.5.9
+          - sqlalchemy[asyncio]>=2.0
+          - alembic>=1.13
 
   - repo: https://github.com/pycqa/bandit
     rev: 1.9.4

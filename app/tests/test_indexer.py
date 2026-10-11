@@ -109,8 +109,11 @@ class TestIndexRepository:
         indexer, _, _, _, _ = _make_indexer([("a.py", "def foo():\n    return 1\n")])
         reported_stages: list[IndexingStage] = []
 
+        async def record_stage(stage: IndexingStage) -> None:
+            reported_stages.append(stage)
+
         await indexer.index_repository(
-            "https://github.com/o/r", "token", "o__r", on_stage=reported_stages.append
+            "https://github.com/o/r", "token", "o__r", on_stage=record_stage
         )
 
         assert reported_stages == [

@@ -18,6 +18,18 @@
 - Route level: `MagicMock(spec=GitHubService)` via the `mock_github_service` fixture, set on `app.state.github_service` in the `client` fixture
 - Service level: inject `httpx.MockTransport(handler)` via `GitHubService(..., transport=...)` and assert on returned data or the raised domain exception
 
+**Database (Postgres):**
+- Tests that touch the DB (`test_index.py`, `test_indexing_jobs.py`) use the `db_session_factory` fixture. It drops and recreates every table on `TEST_DATABASE_URL` with `create_all` (fast; `alembic check` guards against drift from the migrations), then sets `app.state.session_factory` — same pattern as the mocked services
+- Without `TEST_DATABASE_URL` those tests are **skipped**, not failed; everything else runs with no database
+- `TEST_DATABASE_URL` must be a separate, disposable database — it is wiped on every test. Never point it at `DATABASE_URL`'s database
+- `DATABASE_URL` must still be set (any value works) — importing `app.main` builds `Settings`, but no test connects to it
+- One-time setup, then run:
+  ```bash
+  createdb -h localhost -U postgres code_roaster_test   # or: psql -c 'CREATE DATABASE code_roaster_test'
+  # .env: TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/code_roaster_test
+  make test-back
+  ```
+
 **Naming:** `test_<what>_<expected_outcome>` — e.g. `test_empty_code_returns_422`
 
 **Grouping:** one class per endpoint — `class TestReviewStream`, `class TestReviewStructured`

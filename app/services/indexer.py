@@ -8,7 +8,7 @@ the result in `VectorStore`.
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
@@ -23,6 +23,10 @@ from app.services.github import GitHubService
 from app.services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
+
+
+async def _ignore_stage(_stage: IndexingStage) -> None:
+    """Default `on_stage`: progress reporting is optional."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +78,7 @@ class RepoIndexer:
         repo_url: str,
         github_token: str,
         collection_name: str,
-        on_stage: Callable[[IndexingStage], None] | None = None,
+        on_stage: Callable[[IndexingStage], Awaitable[None]] | None = None,
     ) -> IndexingResult:
         """Fetch, chunk, embed, and store a repository's supported source files.
 
@@ -85,28 +89,29 @@ class RepoIndexer:
             repo_url: HTTPS URL of the repository to index.
             github_token: GitHub access token used to fetch its files.
             collection_name: Vector store collection to store the chunks in.
-            on_stage: Called as each pipeline stage starts, to report progress.
+            on_stage: Awaited as each pipeline stage starts, to report progress
+                (the job runner persists it, so it is async).
 
         Returns:
             Summary counts and timing for the run.
         """
-        report_stage = on_stage or (lambda _stage: None)
+        report_stage = on_stage or _ignore_stage
         start_time = time.monotonic()
         logger.info(f"Starting indexing for {repo_url}")
 
-        report_stage(IndexingStage.FETCHING)
+        await report_stage(IndexingStage.FETCHING)
         files = await self._github_service.fetch_repo_files(repo_url, github_token)
         logger.info(f"Fetched {len(files)} source files from {repo_url}")
 
-        report_stage(IndexingStage.CHUNKING)
+        await report_stage(IndexingStage.CHUNKING)
         chunks = self._chunk_files(files)
         logger.info(f"Created {len(chunks)} chunks from {len(files)} files")
 
-        report_stage(IndexingStage.EMBEDDING)
+        await report_stage(IndexingStage.EMBEDDING)
         embeddings = await self._embedder.embed_chunks(chunks)
         logger.info(f"Embedded {len(embeddings)} chunks")
 
-        report_stage(IndexingStage.STORING)
+        await report_stage(IndexingStage.STORING)
         vector_store = self._vector_store_factory(collection_name)
         await vector_store.delete_collection()
         await vector_store.add_chunks(chunks, embeddings)

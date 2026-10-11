@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.constants import IndexingJobState, IndexingStage
@@ -38,24 +40,16 @@ class IndexingSummary(BaseModel):
 
 
 class IndexingJobStatus(BaseModel):
-    """Live status of one repository's background indexing job.
+    """Status of one repository indexing job, as returned by the `/index` routes.
 
-    Held in `app.state.indexing_jobs` and mutated in place by the job runner
-    as it progresses, so polling the status endpoint sees the latest state.
+    Built from an `IndexingJob` row by `app/services/indexing_jobs.py`; the
+    row in Postgres is the source of truth, this is a read-only snapshot.
     """
 
+    id: UUID
     repo_id: str
     repo_url: str
     state: IndexingJobState = IndexingJobState.PENDING
     stage: IndexingStage | None = None
     summary: IndexingSummary | None = None
     error: str | None = None
-
-    @property
-    def is_active(self) -> bool:
-        """Whether the job is still queued or running."""
-        return self.state in (IndexingJobState.PENDING, IndexingJobState.RUNNING)
-
-    def set_stage(self, stage: IndexingStage) -> None:
-        """Record the pipeline stage the job has just entered."""
-        self.stage = stage

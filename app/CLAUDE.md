@@ -1,7 +1,7 @@
 # Code Roaster — CLAUDE.md (Backend)
 
 ## Stack
-Python 3.12, FastAPI, Anthropic SDK, Pydantic v2, Voyage AI (embeddings), Chroma (vector store), conda environment `code-roaster`
+Python 3.12, FastAPI, Anthropic SDK, Pydantic v2, Voyage AI (embeddings), Chroma (vector store), Postgres via SQLAlchemy 2 async (`asyncpg`) + Alembic, conda environment `code-roaster`
 
 ## Project Structure
 ```
@@ -9,6 +9,7 @@ app/
 ├── __init__.py
 ├── main.py              # App setup, lifespan, logging config, and the exception handlers
 ├── config.py            # Settings — all env-loaded config, see "Configuration"
+├── database.py          # Async engine, SessionFactory, Base, get_db/DbSession, init_db — see "Database"
 ├── constants.py         # Named constants shared across app/ (Severity, ANTHROPIC_MODEL, ...)
 ├── exceptions.py        # AppError base + all domain exceptions — see claude-docs/error-handling.md
 ├── pytest.ini           # asyncio_mode = auto, testpaths = tests
@@ -19,7 +20,10 @@ app/
 │   ├── __init__.py
 │   ├── review.py        # Review request/response models, Finding + FindingCategory/Confidence
 │   ├── pr.py            # PullRequestRef, PR review request models
-│   └── index.py         # IndexRepoRequest, IndexingJobStatus, IndexingSummary
+│   ├── index.py         # IndexRepoRequest, IndexingJobStatus, IndexingSummary
+│   └── db/              # SQLAlchemy ORM tables — importing the package registers them on Base.metadata
+│       └── indexing.py  # IndexingJob (`indexing_jobs` table)
+├── migrations/          # Alembic env.py, script template, versions/ — config in root alembic.ini
 ├── prompts/
 │   ├── __init__.py
 │   └── review.py        # System prompts, STRUCTURED_REVIEW_TOOL schema, ReviewToolOutput/FindingToolOutput
@@ -33,7 +37,7 @@ app/
 │   ├── vector_store.py  # VectorStore — persists and searches embeddings via Chroma
 │   ├── indexer.py       # RepoIndexer + IndexingResult — fetch → chunk → embed → store
 │   ├── retriever.py     # CodeRetriever — query → embed → search; the only place retrieval happens
-│   └── indexing_jobs.py # run_indexing_job — background wrapper recording job progress/outcome
+│   └── indexing_jobs.py # create/get indexing jobs + run_indexing_job — job state read/written in Postgres
 ├── routes/
 │   ├── __init__.py
 │   ├── review.py        # /review/stream, /review/structured
@@ -63,6 +67,23 @@ app/
 ## Configuration
 - All configuration comes from `Settings` (`app/config.py`), loaded once from env vars / `.env` — never call `os.environ`/`os.getenv` anywhere else in `app/`
 - New config values (API keys, client secrets, feature toggles) are added as typed fields on `Settings`
+
+## Database
+**Rule: all job state lives in Postgres, never in memory.** No job status, progress or result on `app.state`, in module globals or in caches — `app.state` holds services and the `session_factory` only. Rationale: `ARCHITECTURE.md` §3.8.
+
+- `app/database.py` is the only place an engine or session factory is created. Routes get a session with the `DbSession` dependency (`Annotated[AsyncSession, Depends(get_db)]`); `get_db` reads `app.state.session_factory`
+- Background tasks never reuse the request's session (it is closed by then) — they receive `app.state.session_factory` as an argument and open a short session per write
+- ORM tables live in `app/models/db/` and inherit `Base`; a new table module must be imported in `app/models/db/__init__.py` so Alembic (and the test fixture's `create_all`) see it. API responses stay Pydantic — the service maps rows to response models, routes never return ORM objects
+- DB access lives in services (`app/services/`), never in routes. Translate DB errors the caller can act on into domain exceptions in the service (pattern: `IntegrityError` → `IndexingAlreadyInProgressError` in `create_indexing_job`)
+- Enforce invariants in the schema (unique/partial indexes, `NOT NULL`), not with check-then-write code — a check in Python races across workers
+- Store `StrEnum`s as their lowercase values (`Enum(..., values_callable=...)`), timestamps as `DateTime(timezone=True)`
+- **Schema setup** (`init_db`, called by the lifespan): always `alembic upgrade head`, in every environment. Never add a `create_all` shortcut to app code — it never alters existing tables and drifts from the migrations
+- **Orphaned jobs** (`fail_orphaned_indexing_jobs`, called by the lifespan after `init_db`): `pending`/`running` jobs not updated for `INDEXING_JOB_TIMEOUT_SECONDS` become `failed` with `INDEXING_JOB_ORPHANED_ERROR`. A future job type with in-process execution (V5 agent runs) needs the same sweep, and its runner must update `updated_at` more often than the timeout
+- **Every model change ships with a migration**, run from the project root:
+  - `alembic revision --autogenerate -m "describe change"` → review the file in `app/migrations/versions/` (autogenerate misses some things, e.g. enum value changes)
+  - `alembic upgrade head` / `alembic downgrade -1`; `alembic check` fails if models and migrations have drifted
+  - Migrations are frozen snapshots: write literals in them, never import `app.constants`
+- A model change isn't live, even in development, until its migration exists — the app only ever runs migrations
 
 ## External API Calls
 - Every class that talks to an external API or SDK lives under `app/services/` — no exceptions, `CodeReviewer` included
