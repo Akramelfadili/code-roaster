@@ -23,6 +23,7 @@ from app.exceptions import (
     AIProviderError,
     AIProviderRateLimitError,
     MalformedAIResponseError,
+    OutputTruncatedError,
 )
 from app.models.review import Finding, FindingCategory, StructuredReview
 from app.prompts.review import (
@@ -49,6 +50,7 @@ _REQUIRED_REVIEW_FIELDS = ("summary", "severity", "score", "detected_language")
 # Claude volunteers them, so they can never come from the model.
 _SERVER_SET_FINDING_FIELDS = frozenset({"id", "category"})
 _CONTEXT_CHUNK_SEPARATOR = "\n\n"
+_TRUNCATED_STOP_REASON = "max_tokens"
 
 
 async def _ignore_stage(_stage: ReviewStage) -> None:
@@ -104,6 +106,14 @@ def _log_usage(call_type: str, usage: Usage) -> None:
         f"Token usage — type={call_type} input={usage.input_tokens} "
         f"output={usage.output_tokens} cost_usd={_estimate_cost_usd(usage):.4f}"
     )
+
+
+def _raise_if_truncated(stop_reason: str | None) -> None:
+    """Fail loudly instead of returning a review Claude cut off at `max_tokens`."""
+    if stop_reason == _TRUNCATED_STOP_REASON:
+        raise OutputTruncatedError(
+            f"Claude stopped at max_tokens ({ANTHROPIC_MAX_TOKENS})"
+        )
 
 
 def _require_review_fields(data: ReviewToolOutput) -> None:
@@ -221,6 +231,7 @@ class CodeReviewer:
             raise AIProviderError("Anthropic API call failed") from e
 
         _log_usage("structured", response.usage)
+        _raise_if_truncated(response.stop_reason)
 
         tool_use_block = next(
             (b for b in response.content if b.type == "tool_use"), None
@@ -303,6 +314,10 @@ class CodeReviewer:
                     yield text
                 final_message = await stream.get_final_message()
                 _log_usage("stream", final_message.usage)
+                _raise_if_truncated(final_message.stop_reason)
+        except OutputTruncatedError as e:
+            logger.error(f"Streamed review was truncated: {e}")
+            raise
         except anthropic.RateLimitError as e:
             # The client's exception handler can't cleanly turn this into a JSON
             # error response once streaming has started sending bytes, so log

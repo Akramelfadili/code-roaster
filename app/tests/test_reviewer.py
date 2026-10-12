@@ -12,6 +12,7 @@ from app.exceptions import (
     AIProviderError,
     AIProviderRateLimitError,
     MalformedAIResponseError,
+    OutputTruncatedError,
 )
 from app.models.review import Confidence, FindingCategory, StructuredReview
 from app.services.chunker import Chunk
@@ -76,14 +77,21 @@ def _make_usage(input_tokens: int, output_tokens: int) -> SimpleNamespace:
     )
 
 
-def _make_response(content: list[Any]) -> SimpleNamespace:
-    return SimpleNamespace(content=content, usage=_make_usage(10, 20))
+def _make_response(
+    content: list[Any], stop_reason: str = "tool_use"
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        content=content, usage=_make_usage(10, 20), stop_reason=stop_reason
+    )
 
 
 class _FakeMessageStream:
-    def __init__(self, chunks: list[str], usage: SimpleNamespace) -> None:
+    def __init__(
+        self, chunks: list[str], usage: SimpleNamespace, stop_reason: str = "end_turn"
+    ) -> None:
         self.text_stream = self._iter_chunks(chunks)
         self._usage = usage
+        self._stop_reason = stop_reason
 
     async def _iter_chunks(self, chunks: list[str]) -> Any:
         for chunk in chunks:
@@ -96,7 +104,7 @@ class _FakeMessageStream:
         return None
 
     async def get_final_message(self) -> SimpleNamespace:
-        return SimpleNamespace(usage=self._usage)
+        return SimpleNamespace(usage=self._usage, stop_reason=self._stop_reason)
 
 
 async def _review_with_tool_output(tool_output: dict[str, Any]) -> StructuredReview:
@@ -163,6 +171,17 @@ class TestReviewStructured:
         reviewer = CodeReviewer(client=mock_client)
 
         with pytest.raises(MalformedAIResponseError):
+            await reviewer.review_structured(SAMPLE_CODE, "python")
+
+    async def test_max_tokens_stop_reason_raises_output_truncated(self) -> None:
+        mock_client = MagicMock()
+        tool_use_block = SimpleNamespace(type="tool_use", input=_SAMPLE_TOOL_OUTPUT)
+        mock_client.messages.create = AsyncMock(
+            return_value=_make_response([tool_use_block], stop_reason="max_tokens")
+        )
+        reviewer = CodeReviewer(client=mock_client)
+
+        with pytest.raises(OutputTruncatedError):
             await reviewer.review_structured(SAMPLE_CODE, "python")
 
     async def test_missing_required_field_raises_malformed_response(self) -> None:
@@ -412,5 +431,17 @@ class TestReviewStream:
         reviewer = CodeReviewer(client=mock_client)
 
         with pytest.raises(AIProviderError):
+            async for _ in reviewer.review_stream(SAMPLE_CODE, "python"):
+                pass
+
+    async def test_max_tokens_stop_reason_raises_output_truncated(self) -> None:
+        mock_client = MagicMock()
+        usage = _make_usage(5, 15)
+        mock_client.messages.stream = MagicMock(
+            return_value=_FakeMessageStream(["Partial "], usage, "max_tokens")
+        )
+        reviewer = CodeReviewer(client=mock_client)
+
+        with pytest.raises(OutputTruncatedError):
             async for _ in reviewer.review_stream(SAMPLE_CODE, "python"):
                 pass

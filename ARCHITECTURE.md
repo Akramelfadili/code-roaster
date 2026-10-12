@@ -96,13 +96,21 @@ AppError
 ├── ReviewError
 │   ├── AIProviderError            502 (hidden message)
 │   │   └── AIProviderRateLimitError  429
-│   └── MalformedAIResponseError   500 (hidden message)
+│   ├── MalformedAIResponseError   500 (hidden message)
+│   └── OutputTruncatedError       500 (fixed message; stop_reason == "max_tokens")
 ├── GitHubError                    502 (hidden message)
 │   ├── InvalidPRUrlError / InvalidRepoUrlError   400
 │   ├── GitHubAuthError                           401
 │   ├── PRNotFoundError / RepoNotFoundError       404
 │   └── GitHubRateLimitError                      429
-└── VectorStoreError               500 (hidden message)
+├── VectorStoreError               500 (hidden message)
+│   V5 agent errors (all WARNING, fixed message):
+├── ToolExecutionError             200 (never reaches HTTP: returned to the model as an is_error tool_result)
+├── AgentStepLimitExceededError    429
+├── BudgetExceededError            429
+├── RunTimeoutError                504
+├── RunCancelledError              499
+└── ContextTooLargeError           413
 ```
 
 **Why:**
@@ -493,7 +501,7 @@ Still open:
 | Version | Scope | Architectural impact |
 |---|---|---|
 | **V4 (in progress)** | RAG codebase indexing: an indexing endpoint using background tasks (§3.6) and retrieval-augmented reviews (§5.2). | New routes; `RepoIndexer`, `Embedder` and `VectorStore` wired into `lifespan`; the review prompt gains a context section. |
-| **V5: Agents** | The reviewer moves from single-shot calls to an agent loop that decides for itself what to inspect, using tools such as search the index, read a file, or fetch related PRs. | `CodeReviewer` evolves into a tool-using agent. The RAG services become agent tools. Error handling, token and cost logging must cover multi-step runs, and the daily cost budget (§3.10) must be enforced before agents ship. Runs reuse the review-job pattern (§3.9): each agent step is a new `review_events` type, streamed over the existing SSE endpoint. |
+| **V5: Agents** | The reviewer moves from single-shot calls to an agent loop that decides for itself what to inspect, using tools such as search the index, read a file, or fetch related PRs. | `CodeReviewer` evolves into a tool-using agent. The RAG services become agent tools. Error handling covers multi-step runs through typed errors in §3.1 (`ToolExecutionError` goes back to the model so the loop can recover; the step limit, budget, timeout, cancellation and context-size errors end the run with a `failed` event). Token and cost logging must cover multi-step runs too, and the daily cost budget (§3.10) must be enforced before agents ship. Runs reuse the review-job pattern (§3.9): each agent step is a new `review_events` type, streamed over the existing SSE endpoint. |
 | **V6: Deployment** | Production hosting. | Revisit: token transport and storage (§2 Auth); moving Chroma from local disk to a hosted vector store; moving `BackgroundTasks` to a durable job queue with heartbeats (job state is already in Postgres, §3.8; it would replace the timeout-based orphan sweep, §3.6); CORS and `frontend_url` per environment; secrets management beyond `.env`. |
 
 ---

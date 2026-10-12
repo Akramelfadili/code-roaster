@@ -11,7 +11,7 @@ app/
 ├── config.py            # Settings — all env-loaded config, see "Configuration"
 ├── database.py          # Async engine, SessionFactory, Base, enum_values, get_db/DbSession/FunctionScopedDbSession, init_db — see "Database"
 ├── constants.py         # Named constants shared across app/ (Severity, ANTHROPIC_MODEL, ...)
-├── exceptions.py        # AppError base + all domain exceptions — see claude-docs/error-handling.md
+├── exceptions.py        # AppError base + all domain exceptions, incl. V5 agent errors — see claude-docs/error-handling.md
 ├── pytest.ini           # asyncio_mode = auto, testpaths = tests
 ├── requirements.txt     # Runtime dependencies
 ├── requirements-dev.txt # pytest, ruff, mypy, bandit, pre-commit
@@ -118,6 +118,7 @@ app/
 - Streaming for text responses, `create()` with a tool schema for structured output
 - `cache_control: ephemeral` on every system prompt
 - Handle `RateLimitError` and `APIError` explicitly
+- Check `stop_reason` after every call through `_raise_if_truncated`: `max_tokens` raises `OutputTruncatedError`, never a partial result
 - Log token usage and approximate cost on every call through `_log_usage` in `reviewer.py`; never send more context than needed
 - Pricing constants (`ANTHROPIC_*_COST_PER_MTOK_USD`) are for `ANTHROPIC_MODEL`, so change them whenever the model changes
 
@@ -135,7 +136,7 @@ app/
 
 - **Client input is rejected and server-built input is truncated.** A user can fix an oversized request field, so it gets a `422`. A diff, context or query the server fetches or builds is cut down so the review still runs. Truncation logs at WARNING (a documented exception to "services never log", like retrieval)
 - **A new LLM or embedding call path needs a cap before it ships.** Add the constant to `app/constants.py`, enforce it at the boundary (Pydantic field for client input, the service for fetched or built input), and add a row here
-- **Cost is logged, not yet enforced.** `settings.daily_cost_budget_usd` (env `DAILY_COST_BUDGET_USD`, default `10.0`) and `BudgetExceededError` (`429`) exist, but nothing sums spend or raises the error yet. When enforcement lands, the running total goes in Postgres, never in memory (see *Database*)
+- **Cost is logged, not yet enforced.** `settings.daily_cost_budget_usd` (env `DAILY_COST_BUDGET_USD`, default `10.0`) and `BudgetExceededError` (`429`, `user_message` "Request exceeds cost budget.") exist, but nothing sums spend or raises the error yet. When enforcement lands, the running total goes in Postgres, never in memory (see *Database*)
 
 ## Review Findings
 Every item in `bugs`, `security_issues`, `suggestions` and `positives` is a `Finding` (`app/models/review.py`) — never a plain string. Contract and rationale: `ARCHITECTURE.md` §3.7.
