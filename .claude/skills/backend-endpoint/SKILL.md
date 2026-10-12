@@ -25,7 +25,7 @@ The rules live in the repo. Read them instead of relying on memory, because they
 | Reads or writes Postgres rows | `routes/index.py` → `services/indexing_jobs.py` → `models/index.py` → `tests/test_index.py` |
 | Starts background work and returns 202 | `POST /index/repo` or `POST /review/pr/async` |
 | Streams (SSE) | `GET /review/pr/{job_id}/events` (uses `FunctionScopedDbSession`) |
-| Calls Claude | `routes/review.py` → `services/reviewer.py` |
+| Calls Claude | `routes/review.py` → `services/reviewer.py` → `services/claude_client.py` |
 | Calls GitHub | `routes/pr.py` → `services/github.py` (+ `github_errors.py`) |
 
 Before adding anything new, grep for it. There may already be a service function, an exception or a constant you can reuse, such as `get_review_job`, `REPO_ID_SEPARATOR` or `IndexingJobNotFoundError`.

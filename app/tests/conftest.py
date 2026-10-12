@@ -10,6 +10,7 @@ from sqlalchemy.pool import NullPool
 from app.config import settings
 from app.database import Base
 from app.main import app
+from app.services.cost_budget import CostBudget
 from app.services.github import GitHubService
 from app.services.indexer import RepoIndexer
 from app.services.reviewer import CodeReviewer
@@ -46,6 +47,14 @@ def mock_github_service() -> MagicMock:
     service.exchange_code_for_token = AsyncMock(return_value="mock-access-token")
     service.parse_repo_url = MagicMock(return_value=SAMPLE_REPO_REF)
     return service
+
+
+@pytest.fixture
+def mock_cost_budget() -> MagicMock:
+    budget = MagicMock(spec=CostBudget)
+    budget.ensure_available = AsyncMock(return_value=None)
+    budget.record = AsyncMock(return_value=None)
+    return budget
 
 
 @pytest.fixture

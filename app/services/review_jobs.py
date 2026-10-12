@@ -22,6 +22,8 @@ from app.constants import (
     INTERNAL_SERVER_ERROR_MESSAGE,
     REVIEW_JOB_ORPHANED_ERROR,
     REVIEW_JOB_TIMEOUT_SECONDS,
+    REVIEW_RESULT_SCHEMA_OUTDATED_ERROR,
+    REVIEW_RESULT_SCHEMA_VERSION,
     ReviewEventType,
     ReviewJobState,
     ReviewStage,
@@ -220,7 +222,12 @@ async def _mark_completed(
     ]
     events.append((ReviewEventType.COMPLETED, result))
     await _record_events(
-        session_factory, job_id, events, state=ReviewJobState.COMPLETED, result=result
+        session_factory,
+        job_id,
+        events,
+        state=ReviewJobState.COMPLETED,
+        result=result,
+        schema_version=REVIEW_RESULT_SCHEMA_VERSION,
     )
 
 
@@ -291,7 +298,20 @@ def _failed_event(job_id: UUID, error: str) -> ReviewEvent:
 
 
 def _to_status(job: ReviewJob) -> ReviewJobStatus:
-    """Map a `ReviewJob` row to the API's `ReviewJobStatus`."""
+    """Map a `ReviewJob` row to the API's `ReviewJobStatus`.
+
+    A stored result written in another schema version (or before versions
+    existed) can't be trusted to validate, so the job reads as failed with
+    `REVIEW_RESULT_SCHEMA_OUTDATED_ERROR` instead of raising.
+    """
+    if job.result is not None and job.schema_version != REVIEW_RESULT_SCHEMA_VERSION:
+        return ReviewJobStatus(
+            id=job.id,
+            pr_url=job.pr_url,
+            repo_id=job.repo_id,
+            state=ReviewJobState.FAILED,
+            error=REVIEW_RESULT_SCHEMA_OUTDATED_ERROR,
+        )
     result = None
     if job.result is not None:
         result = StructuredReviewResponse.model_validate(job.result)

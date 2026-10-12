@@ -15,10 +15,9 @@ from chromadb.api.models.Collection import Collection
 from chromadb.api.types import Metadata
 from chromadb.errors import ChromaError, NotFoundError
 
+from app.config import settings
 from app.exceptions import VectorStoreError
 from app.services.chunker import Chunk
-
-_DEFAULT_PERSIST_DIRECTORY = "data/chroma"
 
 
 class VectorStore:
@@ -32,15 +31,15 @@ class VectorStore:
     def __init__(
         self,
         collection_name: str,
-        persist_directory: str = _DEFAULT_PERSIST_DIRECTORY,
+        persist_directory: str = str(settings.chroma_persist_dir),
     ) -> None:
         """Create a vector store backed by a persistent Chroma collection.
 
         Args:
             collection_name: Name of the Chroma collection. Callers scope this
                 to one repository so different repos' chunks never mix.
-            persist_directory: Directory Chroma persists its data under,
-                relative to the project root. Defaults to `data/chroma`.
+            persist_directory: Directory Chroma persists its data under.
+                Defaults to `Settings.chroma_persist_dir`.
         """
         self._collection_name = collection_name
         self._client = chromadb.PersistentClient(path=persist_directory)

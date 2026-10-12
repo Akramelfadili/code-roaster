@@ -7,17 +7,18 @@ import anthropic
 import httpx
 import pytest
 
-from app.constants import MAX_CONTEXT_CHARS, ReviewStage
+from app.constants import ReviewStage
 from app.exceptions import (
     AIProviderError,
     AIProviderRateLimitError,
+    BudgetExceededError,
     MalformedAIResponseError,
     OutputTruncatedError,
 )
 from app.models.review import Confidence, FindingCategory, StructuredReview
 from app.services.chunker import Chunk
 from app.services.retriever import CodeRetriever
-from app.services.reviewer import CodeReviewer, _fit_context_budget
+from app.services.reviewer import CodeReviewer
 from app.tests.mocks import SAMPLE_CHUNK, SAMPLE_CODE, SAMPLE_REPO_ID
 
 _ANTHROPIC_REQUEST = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
@@ -373,34 +374,6 @@ class TestReviewPrWithContext:
         on_stage.assert_awaited_once_with(ReviewStage.REVIEWING)
 
 
-class TestFitContextBudget:
-    # Each chunk's formatted size is just over a third of the budget, so only
-    # the first two fit.
-    _CHUNK_CONTENT_CHARS = MAX_CONTEXT_CHARS // 3
-
-    def _make_ranked_chunks(self, count: int) -> list[Chunk]:
-        return [
-            Chunk(
-                content="x" * self._CHUNK_CONTENT_CHARS,
-                file_path=f"rank_{rank}.py",
-                start_line=1,
-                end_line=2,
-                language="python",
-            )
-            for rank in range(count)
-        ]
-
-    def test_over_budget_drops_lowest_ranked_chunks_first(self) -> None:
-        chunks = self._make_ranked_chunks(4)
-
-        assert _fit_context_budget(chunks) == chunks[:2]
-
-    def test_within_budget_keeps_every_chunk(self) -> None:
-        chunks = self._make_ranked_chunks(2)
-
-        assert _fit_context_budget(chunks) == chunks
-
-
 class TestReviewStream:
     async def test_happy_path_yields_stream_text(self) -> None:
         mock_client = MagicMock()
@@ -445,3 +418,79 @@ class TestReviewStream:
         with pytest.raises(OutputTruncatedError):
             async for _ in reviewer.review_stream(SAMPLE_CODE, "python"):
                 pass
+
+
+class TestCostBudgetEnforcement:
+    _EXPECTED_COST_USD = (10 * 3.00 + 20 * 15.00) / 1_000_000
+
+    def _make_structured_client(self, stop_reason: str = "tool_use") -> MagicMock:
+        mock_client = MagicMock()
+        tool_use_block = SimpleNamespace(type="tool_use", input=_SAMPLE_TOOL_OUTPUT)
+        mock_client.messages.create = AsyncMock(
+            return_value=_make_response([tool_use_block], stop_reason)
+        )
+        return mock_client
+
+    async def test_structured_call_checks_budget_and_records_its_cost(
+        self, mock_cost_budget: MagicMock
+    ) -> None:
+        reviewer = CodeReviewer(
+            client=self._make_structured_client(), budget=mock_cost_budget
+        )
+
+        await reviewer.review_structured(SAMPLE_CODE, "python")
+
+        mock_cost_budget.ensure_available.assert_awaited_once()
+        mock_cost_budget.record.assert_awaited_once_with(
+            pytest.approx(self._EXPECTED_COST_USD)
+        )
+
+    async def test_exceeded_budget_blocks_structured_call(
+        self, mock_cost_budget: MagicMock
+    ) -> None:
+        mock_cost_budget.ensure_available.side_effect = BudgetExceededError("spent")
+        mock_client = self._make_structured_client()
+        reviewer = CodeReviewer(client=mock_client, budget=mock_cost_budget)
+
+        with pytest.raises(BudgetExceededError):
+            await reviewer.review_structured(SAMPLE_CODE, "python")
+        mock_client.messages.create.assert_not_called()
+        mock_cost_budget.record.assert_not_called()
+
+    async def test_truncated_structured_call_still_records_its_cost(
+        self, mock_cost_budget: MagicMock
+    ) -> None:
+        reviewer = CodeReviewer(
+            client=self._make_structured_client("max_tokens"), budget=mock_cost_budget
+        )
+
+        with pytest.raises(OutputTruncatedError):
+            await reviewer.review_structured(SAMPLE_CODE, "python")
+        mock_cost_budget.record.assert_awaited_once()
+
+    async def test_stream_records_its_cost(self, mock_cost_budget: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_client.messages.stream = MagicMock(
+            return_value=_FakeMessageStream(["review"], _make_usage(10, 20))
+        )
+        reviewer = CodeReviewer(client=mock_client, budget=mock_cost_budget)
+
+        async for _ in reviewer.review_stream(SAMPLE_CODE, "python"):
+            pass
+
+        mock_cost_budget.ensure_available.assert_awaited_once()
+        mock_cost_budget.record.assert_awaited_once_with(
+            pytest.approx(self._EXPECTED_COST_USD)
+        )
+
+    async def test_exceeded_budget_blocks_stream(
+        self, mock_cost_budget: MagicMock
+    ) -> None:
+        mock_cost_budget.ensure_available.side_effect = BudgetExceededError("spent")
+        mock_client = MagicMock()
+        reviewer = CodeReviewer(client=mock_client, budget=mock_cost_budget)
+
+        with pytest.raises(BudgetExceededError):
+            async for _ in reviewer.review_stream(SAMPLE_CODE, "python"):
+                pass
+        mock_client.messages.stream.assert_not_called()

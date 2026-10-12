@@ -113,3 +113,11 @@ class ReviewEventType(StrEnum):
 # startup whose row hasn't been updated for this long is marked failed.
 REVIEW_JOB_TIMEOUT_SECONDS = 30 * 60
 REVIEW_JOB_ORPHANED_ERROR = "Server restarted"
+
+# Version of the `StructuredReviewResponse` shape stored in `reviews.result`.
+# Bump it whenever that shape changes incompatibly (e.g. a new required
+# `Finding` field): stored results with another version, or none, are then
+# reported as failed with REVIEW_RESULT_SCHEMA_OUTDATED_ERROR instead of
+# failing validation.
+REVIEW_RESULT_SCHEMA_VERSION = 1
+REVIEW_RESULT_SCHEMA_OUTDATED_ERROR = "result schema outdated"

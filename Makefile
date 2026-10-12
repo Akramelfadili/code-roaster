@@ -60,7 +60,7 @@ security-back: ## Bandit security scan on app/
 	bandit -r app/ -c .bandit --exclude app/tests
 
 test-back: ## Pytest suite in app/tests/
-	cd app && pytest
+	cd app && pytest -vv
 
 # ── Frontend ─────────────────────────────────────────────────────────────────
 

@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -104,6 +105,23 @@ class TestIndexRepository:
             await indexer.index_repository(
                 "https://github.com/o/missing", "token", "o__missing"
             )
+
+    async def test_chunking_runs_off_the_event_loop_thread(self) -> None:
+        indexer, _, mock_chunker, _, _ = _make_indexer(
+            [("a.py", "def foo():\n    return 1\n")]
+        )
+        chunk_thread_ids: list[int] = []
+
+        def record_thread(*args: object) -> list[Chunk]:
+            chunk_thread_ids.append(threading.get_ident())
+            return [_SAMPLE_CHUNK]
+
+        mock_chunker.chunk_file.side_effect = record_thread
+
+        await indexer.index_repository("https://github.com/o/r", "token", "o__r")
+
+        assert chunk_thread_ids
+        assert threading.get_ident() not in chunk_thread_ids
 
     async def test_reports_each_stage_in_order(self) -> None:
         indexer, _, _, _, _ = _make_indexer([("a.py", "def foo():\n    return 1\n")])

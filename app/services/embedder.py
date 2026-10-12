@@ -13,14 +13,18 @@ from voyageai.client_async import AsyncClient
 from voyageai.error import RateLimitError, VoyageError
 
 from app.config import settings
-from app.constants import MAX_QUERY_CHARS
+from app.constants import MAX_QUERY_CHARS, TOKENS_PER_MTOK
 from app.exceptions import AIProviderError, AIProviderRateLimitError
 from app.services.chunker import Chunk
+from app.services.cost_budget import CostBudget
 
 logger = logging.getLogger(__name__)
 
 
 _EMBEDDING_MODEL = "voyage-code-3"
+# USD per million tokens for _EMBEDDING_MODEL, used to charge the daily cost
+# budget. Update together with _EMBEDDING_MODEL.
+_EMBEDDING_COST_PER_MTOK_USD = 0.18
 _MAX_BATCH_SIZE = 128
 # `input_type` tags each text's role so documents and the queries that search
 # them are embedded into a compatible space; the two must not be mixed up.
@@ -31,16 +35,21 @@ _QUERY_INPUT_TYPE = "query"
 class Embedder:
     """Converts text into Voyage AI embedding vectors for the RAG pipeline."""
 
-    def __init__(self, client: AsyncClient | None = None) -> None:
+    def __init__(
+        self, client: AsyncClient | None = None, budget: CostBudget | None = None
+    ) -> None:
         """Create an embedder.
 
         Args:
             client: Voyage AI async client to use. Defaults to a fresh client
                 authenticated with ``settings.voyage_api_key``; pass a fake in
                 tests to avoid hitting the API.
+            budget: Checked before and charged after every Voyage AI call.
+                Only tests leave it out, which disables enforcement.
         """
         self._client = client or AsyncClient(api_key=settings.voyage_api_key)
         self._model = _EMBEDDING_MODEL
+        self._budget = budget
 
     async def embed_chunks(self, chunks: list[Chunk]) -> list[list[float]]:
         """Embed code chunks as document vectors, one per chunk.
@@ -109,9 +118,12 @@ class Embedder:
             One embedding vector per input text, in input order.
 
         Raises:
+            BudgetExceededError: Today's AI spend has reached the daily budget.
             AIProviderRateLimitError: On a Voyage AI rate-limit response.
             AIProviderError: On any other Voyage AI failure.
         """
+        if self._budget is not None:
+            await self._budget.ensure_available()
         try:
             response = await self._client.embed(
                 texts, model=self._model, input_type=input_type
@@ -121,8 +133,13 @@ class Embedder:
         except VoyageError as e:
             raise AIProviderError("Voyage AI embedding request failed") from e
 
+        cost_usd = (
+            response.total_tokens * _EMBEDDING_COST_PER_MTOK_USD / TOKENS_PER_MTOK
+        )
         logger.info(
             f"Token usage — type=embedding input_type={input_type} "
-            f"texts={len(texts)} input={response.total_tokens}"
+            f"texts={len(texts)} input={response.total_tokens} cost_usd={cost_usd:.4f}"
         )
+        if self._budget is not None:
+            await self._budget.record(cost_usd)
         return cast(list[list[float]], response.embeddings)

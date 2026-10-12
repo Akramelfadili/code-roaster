@@ -6,6 +6,7 @@ into `Chunk`s with `CodeChunker`, embeds them with `Embedder`, and persists
 the result in `VectorStore`.
 """
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -104,7 +105,7 @@ class RepoIndexer:
         logger.info(f"Fetched {len(files)} source files from {repo_url}")
 
         await report_stage(IndexingStage.CHUNKING)
-        chunks = self._chunk_files(files)
+        chunks = await asyncio.to_thread(self._chunk_files, files)
         logger.info(f"Created {len(chunks)} chunks from {len(files)} files")
 
         await report_stage(IndexingStage.EMBEDDING)

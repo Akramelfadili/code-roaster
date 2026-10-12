@@ -6,7 +6,11 @@ import pytest
 import voyageai.error
 
 from app.constants import MAX_QUERY_CHARS
-from app.exceptions import AIProviderError, AIProviderRateLimitError
+from app.exceptions import (
+    AIProviderError,
+    AIProviderRateLimitError,
+    BudgetExceededError,
+)
 from app.services.chunker import Chunk
 from app.services.embedder import Embedder
 
@@ -113,3 +117,34 @@ class TestEmbedChunks:
 
         with pytest.raises(AIProviderError):
             await embedder.embed_chunks(_make_chunks(1))
+
+
+class TestCostBudgetEnforcement:
+    async def test_each_batch_checks_budget_and_records_its_cost(
+        self, mock_cost_budget: MagicMock
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client.embed = AsyncMock(side_effect=_fake_embed)
+        embedder = Embedder(client=mock_client, budget=mock_cost_budget)
+
+        await embedder.embed_chunks(_make_chunks(_MAX_BATCH_SIZE + 1))
+
+        assert mock_cost_budget.ensure_available.await_count == 2
+        recorded_costs = [
+            call.args[0] for call in mock_cost_budget.record.await_args_list
+        ]
+        assert recorded_costs == pytest.approx(
+            [_MAX_BATCH_SIZE * 0.18 / 1_000_000, 1 * 0.18 / 1_000_000]
+        )
+
+    async def test_exceeded_budget_blocks_embedding_call(
+        self, mock_cost_budget: MagicMock
+    ) -> None:
+        mock_cost_budget.ensure_available.side_effect = BudgetExceededError("spent")
+        mock_client = MagicMock()
+        mock_client.embed = AsyncMock(side_effect=_fake_embed)
+        embedder = Embedder(client=mock_client, budget=mock_cost_budget)
+
+        with pytest.raises(BudgetExceededError):
+            await embedder.embed_query("find the parser")
+        mock_client.embed.assert_not_called()

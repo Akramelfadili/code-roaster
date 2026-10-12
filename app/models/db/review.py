@@ -20,7 +20,9 @@ class ReviewJob(Base):
     """One background review run.
 
     `result` holds the full `StructuredReviewResponse` JSON once the job
-    completes. `repo_id` is set for PR reviews that pull in RAG context.
+    completes, and `schema_version` the version of that shape it was written
+    in (`REVIEW_RESULT_SCHEMA_VERSION`), so a read can tell an outdated result
+    from a current one. `repo_id` is set for PR reviews that pull in RAG context.
     """
 
     __tablename__ = "reviews"
@@ -33,6 +35,7 @@ class ReviewJob(Base):
         default=ReviewJobState.PENDING,
     )
     result: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    schema_version: Mapped[int | None]
     error: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
