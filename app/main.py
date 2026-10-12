@@ -2,7 +2,6 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -26,8 +25,6 @@ from app.services.retriever import CodeRetriever
 from app.services.review_jobs import fail_orphaned_review_jobs
 from app.services.reviewer import CodeReviewer
 from app.services.vector_store import VectorStore
-
-load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)-8s %(name)s: %(message)s"
