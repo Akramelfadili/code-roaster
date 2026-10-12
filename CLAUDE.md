@@ -27,6 +27,13 @@ All commands run from the project root via `make`.
 | `make run` | Run backend and frontend together (honcho, via `Procfile`) |
 | `make run-back` | Run the FastAPI backend with auto-reload (`uvicorn app.main:app --reload`) |
 | `make run-front` | Run the Vite dev server |
+| `make dev` | Start the dev Postgres (Docker Compose), then the backend with auto-reload |
+| `make db-up` | Start the dev Postgres in the background (`localhost:5432`, persisted in the `postgres_data` volume) |
+| `make db-down` | Stop all Compose containers (dev data is kept) |
+| `make db-reset` | Delete the dev Postgres volume and start a fresh, empty database |
+| `make db-test-up` | Start the ephemeral test Postgres (`localhost:5433`, no volume) for `TEST_DATABASE_URL` |
+| `make db-migrate` | Run `alembic upgrade head` against `DATABASE_URL` (needs `db-up` first) |
+| `make db-shell` | Open `psql` in the running dev Postgres container |
 | `make lint-back` | Ruff lint check on `app/` |
 | `make format-back` | Ruff format `app/` (mutates files) |
 | `make type-back` | Mypy strict type check on `app/` |

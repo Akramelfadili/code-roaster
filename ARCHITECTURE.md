@@ -287,7 +287,7 @@ Conventions: `app/CLAUDE.md` → *Review Findings*, `frontend/claude-docs/data-l
 
 **Trade-offs:**
 
-- A Postgres server is now required to run the backend, and to run the DB-backed tests (`TEST_DATABASE_URL`).
+- A Postgres server is now required to run the backend, and to run the DB-backed tests (`TEST_DATABASE_URL`). For local dev, `docker-compose.yml` provides both, so no host install is needed: `postgres` (port 5432, data kept in the `postgres_data` volume) and `postgres-test` (port 5433, no volume, so removing the container wipes it). Compose runs only the databases; the backend and frontend still run on the host. `make dev` / `make db-*` wrap it (see the root `CLAUDE.md` → *Commands*).
 - Every model change needs a migration before the app will see it, including in development.
 
 Conventions: `app/CLAUDE.md` → *Database*.
