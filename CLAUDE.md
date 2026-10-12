@@ -66,7 +66,14 @@ All commands run from the project root via `make`.
 - Before starting a new feature, check `git branch --show-current`. If the branch is named for different work, propose a new branch
 
 ## General Rules
-- No commented out code
+- **Comments explain *why*, never *what*.** Only write one for a non-obvious decision, a known limitation or TODO, a workaround, or context the code can't show. Never add:
+  - comments that restate the code or a name (`# Poll interval` above `POLL_INTERVAL_SECONDS`)
+  - change-log comments (`# Fix:`, `// Fixed:`, `// Changed to...`, `# Added for X`) — that belongs in the commit message
+  - section dividers or banners (`# ---- Helpers ----`, `// ===== State =====`)
+  - comments after closing braces (`} // end if`, `} // useEffect`)
+  - commented-out code — delete it; git has the history
+  - references only you can resolve (`see conversation from <date>`, `per our chat`)
+- Docstrings (Python) and JSDoc on types/props are not covered by this rule — they're API documentation
 - No magic strings or numbers — use constants
 - Descriptive names always (`isLoadingReview` not `loading`)
 - Small functions — if over 20 lines, split it

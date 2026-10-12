@@ -49,7 +49,6 @@ MAX_INDEXABLE_FILE_LINES = 500
 # and names its vector store collection, e.g. `octocat__hello-world`.
 REPO_ID_SEPARATOR = "__"
 
-# Shown to clients in place of an unmodeled exception's real message.
 INTERNAL_SERVER_ERROR_MESSAGE = "Internal server error"
 
 

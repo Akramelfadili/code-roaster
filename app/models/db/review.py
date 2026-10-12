@@ -13,7 +13,6 @@ from app.database import Base, enum_values
 ACTIVE_REVIEW_JOB_STATES = (ReviewJobState.PENDING, ReviewJobState.RUNNING)
 TERMINAL_REVIEW_EVENT_TYPES = (ReviewEventType.COMPLETED, ReviewEventType.FAILED)
 
-# Longest `ReviewEventType` value the `type` column accepts.
 _EVENT_TYPE_MAX_LENGTH = 32
 
 

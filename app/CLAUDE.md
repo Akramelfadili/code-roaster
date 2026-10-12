@@ -57,6 +57,7 @@ app/
 ## Python Standards
 - Constants referenced by more than one module live in `app/constants.py`; module-private tuning values (chunk sizes, Voyage model name, batch size) stay module-local
 - Docstrings on every class and public method
+- `#` comments only explain *why* (decisions, limitations, workarounds) — never restate the code, log a fix, divide sections or keep commented-out code. Full rule in root CLAUDE.md
 - f-strings for string formatting
 - `pathlib` over `os.path`
 - Type hints, explicit return types, and no `Any` are enforced by mypy strict

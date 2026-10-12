@@ -44,7 +44,7 @@ _AUTO_LANGUAGE = "auto"
 # they're deliberately excluded here and defaulted via `.get(..., [])` below
 # instead of raising. TODO: decide whether to loosen the schema to match this
 # (needs a live test against the real API to see if that changes compliance,
-# rather than guessing) — see conversation from 2026-07-28.
+# rather than guessing).
 _REQUIRED_REVIEW_FIELDS = ("summary", "severity", "score", "detected_language")
 # Finding fields the server always sets itself; dropped from tool input even if
 # Claude volunteers them, so they can never come from the model.

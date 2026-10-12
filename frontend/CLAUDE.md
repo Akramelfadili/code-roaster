@@ -25,6 +25,7 @@ src/
 - **Where types go:** a component's props interface lives in the component file, directly above the component. Every other type, interface, enum, and Zod schema lives in `src/types/`
 - Use the `as const` pattern for fixed sets of values — never `Record<>` types
 - Explicit return types on all functions
+- `//` comments only explain *why* (decisions, limitations, workarounds) — never restate the code, log a fix (`// Fixed:`), divide sections, trail a closing brace, or keep commented-out code. Full rule in root CLAUDE.md
 
 ## React Standards
 - Functional components only. For error boundaries use the `react-error-boundary` package (see `components/ErrorBoundary.tsx`) — never hand-write a class component

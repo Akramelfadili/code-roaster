@@ -36,7 +36,6 @@ from app.services.reviewer import CodeReviewer
 
 logger = logging.getLogger(__name__)
 
-# How often an SSE stream checks the event log for new events.
 _EVENT_POLL_INTERVAL_SECONDS = 0.5
 
 _STAGE_EVENT_TYPES = {
@@ -44,7 +43,6 @@ _STAGE_EVENT_TYPES = {
     ReviewStage.REVIEWING: ReviewEventType.REVIEWING,
 }
 
-# An event waiting to be written: its type and its `data` payload.
 _NewEvent = tuple[ReviewEventType, dict[str, object] | None]
 _StageCallback = Callable[[ReviewStage], Awaitable[None]]
 
