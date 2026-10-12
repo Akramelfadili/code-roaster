@@ -41,7 +41,7 @@ repos:
       - id: bandit
         args: [-c, .bandit]
         files: ^(?!frontend/).*\.py$
-        exclude: ^app/tests/
+        exclude: ^(app/tests/|\.claude/)
 
   - repo: local
     hooks:

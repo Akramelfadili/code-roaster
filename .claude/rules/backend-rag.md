@@ -4,6 +4,9 @@ paths:
   - 'app/services/embedder.py'
   - 'app/services/vector_store.py'
   - 'app/services/indexer.py'
+  - 'app/services/retriever.py'
+  - 'app/services/reviewer.py'
+  - 'app/services/review_jobs.py'
   - 'app/routes/index.py'
   - 'app/routes/pr.py'
 ---

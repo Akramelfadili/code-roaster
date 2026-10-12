@@ -11,3 +11,5 @@ The full conventions live in `frontend/claude-docs/testing.md`. Before adding or
 - Do hook tests use a fresh `QueryClientProvider` per test?
 - Do assertions target behaviour, not class names or snapshots?
 - Run `make test-front` before finishing
+
+@../../frontend/claude-docs/testing.md

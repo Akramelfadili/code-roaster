@@ -67,7 +67,7 @@ test-back: ## Pytest suite in app/tests/
 run-front: ## Run the Vite dev server
 	cd frontend && npm run dev
 
-lint-front: ## Oxlint on frontend/src/
+lint-front: ## ESLint on frontend/src/
 	cd frontend && npm run lint
 
 format-front: ## Prettier format check on frontend/src/

@@ -6,3 +6,4 @@ select = ["E", "F", "I", "N", "UP", "S", "B", "C4", "PTH"]
 
 [lint.per-file-ignores]
 "**/tests/**" = ["S101"]
+".claude/hooks/**" = ["S603", "S607"]

@@ -163,4 +163,3 @@ Every item in `bugs`, `security_issues`, `suggestions` and `positives` is a `Fin
 
 @claude-docs/error-handling.md
 @claude-docs/rag-pipeline.md
-@claude-docs/testing.md

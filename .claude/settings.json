@@ -5,7 +5,44 @@
       "Bash(npm run *)",
       "Bash(npx prettier *)",
       "Bash(make lint-front *)",
-      "Bash(make type-front *)"
+      "Bash(make type-front *)",
+      "Bash(make lint-back)",
+      "Bash(make type-back)",
+      "Bash(make security-back)",
+      "Bash(make test-back)",
+      "Bash(make test-front)",
+      "Bash(make format-front)",
+      "Bash(make check-all)",
+      "Bash(alembic check)",
+      "Bash(alembic history *)",
+      "Bash(alembic current)"
+    ],
+    "ask": ["Bash(git commit *)"],
+    "deny": ["Read(./.env)", "Edit(./.env)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard_bash.py\"", "timeout": 10 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/check_edited_file.py\"", "timeout": 90 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/check_contract_drift.py\"", "timeout": 30 }
+        ]
+      }
     ]
   }
 }

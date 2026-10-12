@@ -73,4 +73,3 @@ src/
 - `git commit --no-verify` only when a hook is broken by an environment issue
 
 @claude-docs/data-layer.md
-@claude-docs/testing.md

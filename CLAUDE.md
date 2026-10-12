@@ -45,6 +45,9 @@ All commands run from the project root via `make`.
 | `make test-front` | Vitest suite in `frontend/` |
 | `make check-all` | Runs all checks (no format-back — it mutates) |
 
+- Backend tests need `DATABASE_URL` in `.env` (any value) or collection fails entirely; DB tests are skipped without `TEST_DATABASE_URL` (start it with `make db-test-up`). Always report pass/skip/fail counts, never just "tests pass".
+- Migrations run from the project root: `alembic revision --autogenerate -m "..."`, `alembic upgrade head`, `alembic check`.
+
 ## Secrets & Environment
 - All secrets (API keys, OAuth client ID/secret) live in root `.env`, gitignored, never committed — `.env.example` documents the required keys
 - Loaded exclusively through the backend's `Settings` (`app/config.py`) — see `app/CLAUDE.md`'s Configuration section
@@ -60,6 +63,7 @@ All commands run from the project root via `make`.
 - Always write meaningful commit messages — never "update" or "fix stuff"
 - Claude can create branches and commit but must tell me what it's committing before doing it
 - Never push — I push manually
+- Before starting a new feature, check `git branch --show-current`. If the branch is named for different work, propose a new branch
 
 ## General Rules
 - No commented out code

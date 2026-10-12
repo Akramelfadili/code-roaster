@@ -122,7 +122,7 @@ AppError
 
 **Known exception:** streaming (`CodeReviewer.review_stream`) logs inline before re-raising. Once bytes have been sent, the central handler can no longer send a clean JSON error.
 
-Full rules: `app/CLAUDE.md` → *Error Handling*.
+Full rules: `app/claude-docs/error-handling.md`.
 
 ### 3.2 Pydantic Settings for config (fail fast)
 
@@ -198,7 +198,7 @@ An `AbortController` cancels an in-flight stream when a new review is submitted.
 - **Retrieval is never done inside the reviewer.** `CodeReviewer` receives an optional `CodeRetriever` and only consumes its chunks; it never touches `Embedder` or `VectorStore`. This keeps the reviewer to one job (calling the LLM) and makes retrieval a standalone callable, which V5 agents need as a tool (§6).
 - **Definition-aligned chunks** (≤100 lines; fallback of 50-line windows with 10 lines of overlap; chunks under 5 lines dropped) keep each retrieved result a coherent unit, such as a function or class, not an arbitrary slice.
 
-Details and thresholds: §5 and `app/CLAUDE.md` → *RAG Pipeline*.
+Details and thresholds: §5 and `app/claude-docs/rag-pipeline.md`.
 
 ### 3.6 Background tasks for indexing
 
@@ -330,7 +330,7 @@ Every job ends with exactly one terminal event. Failures follow the `run_indexin
 - **Clients must `close()` the `EventSource` on `completed`/`failed`.** Otherwise the browser reconnects after the stream ends. Each reconnect gets an empty stream that closes at once, so it is wasteful but harmless.
 - **No job listing, cancellation or retention** yet. Rows and events are kept forever.
 
-Conventions: `app/CLAUDE.md` → *Database* and *Review jobs*.
+Conventions: `app/CLAUDE.md` → *Database* and *Review Jobs*.
 
 ### 3.10 Input caps and cost visibility
 
