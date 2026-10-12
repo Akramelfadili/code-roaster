@@ -36,19 +36,28 @@ describe('useGitHubAuth', () => {
     expect(window.location.href).toBe(API_GITHUB_LOGIN_ENDPOINT);
   });
 
-  it('extracts an OAuth token from the callback URL and redirects to home', () => {
-    window.history.replaceState({}, '', '/auth/callback?token=gh-token');
+  it('extracts an OAuth token from the callback URL fragment and redirects to home', () => {
+    window.history.replaceState({}, '', '/auth/callback#token=gh-token');
 
     const { result } = renderHook(() => useGitHubAuth());
 
     expect(result.current.isAuthenticated).toBe(true);
     expect(result.current.githubToken).toBe('gh-token');
     expect(window.location.pathname).toBe('/');
-    expect(window.location.search).toBe('');
+    expect(window.location.hash).toBe('');
   });
 
-  it('ignores an OAuth token param outside the callback path', () => {
-    window.history.replaceState({}, '', '/?token=gh-token');
+  it('ignores an OAuth token passed in the callback query string', () => {
+    window.history.replaceState({}, '', '/auth/callback?token=gh-token');
+
+    const { result } = renderHook(() => useGitHubAuth());
+
+    expect(result.current.isAuthenticated).toBe(false);
+    expect(result.current.githubToken).toBeNull();
+  });
+
+  it('ignores an OAuth token fragment outside the callback path', () => {
+    window.history.replaceState({}, '', '/#token=gh-token');
 
     const { result } = renderHook(() => useGitHubAuth());
 
@@ -57,7 +66,7 @@ describe('useGitHubAuth', () => {
   });
 
   it('persists a token from the OAuth callback to sessionStorage', () => {
-    window.history.replaceState({}, '', '/auth/callback?token=gh-token');
+    window.history.replaceState({}, '', '/auth/callback#token=gh-token');
 
     renderHook(() => useGitHubAuth());
 

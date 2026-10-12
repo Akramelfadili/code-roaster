@@ -23,6 +23,17 @@ describe('parseReviewResult', () => {
     });
   });
 
+  it('rejects findings sent as plain strings', () => {
+    expect(() =>
+      parseReviewResult({
+        summary: 'Looks good',
+        severity: Severity.Low,
+        score: 8,
+        bugs: ['Off-by-one error'],
+      })
+    ).toThrow('Received a malformed review response from the server');
+  });
+
   it('throws a malformed-response AppError when the payload fails schema validation', () => {
     const invalidPayload = { summary: 'missing required fields' };
 

@@ -33,6 +33,11 @@ class AppError(Exception):
         super().__init__(message)
         self.debug_context = debug_context
 
+    @property
+    def client_message(self) -> str:
+        """The message safe to show the client: `user_message`, else our own."""
+        return self.user_message if self.user_message is not None else str(self)
+
 
 class ReviewError(AppError):
     status_code = 500
@@ -47,6 +52,18 @@ class AIProviderRateLimitError(AIProviderError):
     status_code = 429
     log_level = logging.WARNING
     user_message: str | None = None
+
+
+class OutputTruncatedError(ReviewError):
+    """Claude stopped at `max_tokens`, so the review it returned is partial."""
+
+    status_code = 500
+    user_message: str | None = "Review output was truncated. Try with a smaller input."
+
+
+class ReviewJobNotFoundError(ReviewError):
+    status_code = 404
+    log_level = logging.WARNING
 
 
 class MalformedAIResponseError(ReviewError):
@@ -93,3 +110,75 @@ class GitHubRateLimitError(GitHubError):
     status_code = 429
     log_level = logging.WARNING
     user_message = None
+
+
+class IndexingError(AppError):
+    status_code = 500
+
+
+class IndexingJobNotFoundError(IndexingError):
+    status_code = 404
+    log_level = logging.WARNING
+
+
+class IndexingAlreadyInProgressError(IndexingError):
+    status_code = 409
+    log_level = logging.WARNING
+
+
+class VectorStoreError(AppError):
+    status_code = 500
+    user_message: str | None = "Vector store unavailable"
+
+
+class BudgetExceededError(AppError):
+    """A request would push spend past the daily cost budget."""
+
+    status_code = 429
+    log_level = logging.WARNING
+    user_message: str | None = "Request exceeds cost budget."
+
+
+class ToolExecutionError(AppError):
+    """An agent tool failed. Never raised to the HTTP layer.
+
+    The agent loop catches it and returns `client_message` to the model as a
+    `tool_result` with `is_error=True`, so the model can recover. The 200
+    status only applies if it ever reaches `main.py` by mistake.
+    """
+
+    status_code = 200
+    log_level = logging.WARNING
+    user_message: str | None = "Tool execution failed."
+
+
+class AgentStepLimitExceededError(AppError):
+    """An agent run used up its maximum number of loop steps."""
+
+    status_code = 429
+    log_level = logging.WARNING
+    user_message: str | None = "Agent reached maximum step limit."
+
+
+class RunTimeoutError(AppError):
+    """An agent run exceeded its wall-clock time limit."""
+
+    status_code = 504
+    log_level = logging.WARNING
+    user_message: str | None = "Agent run timed out."
+
+
+class RunCancelledError(AppError):
+    """An agent run was cancelled before finishing (499: client closed request)."""
+
+    status_code = 499
+    log_level = logging.WARNING
+    user_message: str | None = "Agent run was cancelled."
+
+
+class ContextTooLargeError(AppError):
+    """The context an agent step would send exceeds the maximum size."""
+
+    status_code = 413
+    log_level = logging.WARNING
+    user_message: str | None = "Context exceeds maximum size."

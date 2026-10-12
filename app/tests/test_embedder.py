@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import voyageai.error
 
+from app.constants import MAX_QUERY_CHARS
 from app.exceptions import AIProviderError, AIProviderRateLimitError
 from app.services.chunker import Chunk
 from app.services.embedder import Embedder
@@ -40,6 +41,22 @@ def _rate_limit_error() -> voyageai.error.RateLimitError:
 
 def _voyage_error() -> voyageai.error.VoyageError:
     return voyageai.error.VoyageError("boom")  # type: ignore[no-untyped-call]
+
+
+class TestEmbedQuery:
+    async def test_query_over_max_length_is_truncated_before_embedding(
+        self,
+    ) -> None:
+        query = "q" * (MAX_QUERY_CHARS + 1)
+        mock_client = MagicMock()
+        mock_client.embed = AsyncMock(side_effect=_fake_embed)
+        embedder = Embedder(client=mock_client)
+
+        await embedder.embed_query(query)
+
+        mock_client.embed.assert_called_once_with(
+            [query[:MAX_QUERY_CHARS]], model="voyage-code-3", input_type="query"
+        )
 
 
 class TestEmbedChunks:

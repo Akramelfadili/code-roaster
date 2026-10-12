@@ -12,5 +12,6 @@ build/
 .coverage
 htmlcov/
 coverage.xml
-.claude
+.claude/settings.local.json
 data/chroma
+.claude/worktrees/

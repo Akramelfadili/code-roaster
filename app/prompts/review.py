@@ -1,8 +1,9 @@
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 import anthropic
 
 from app.constants import SEVERITY_VALUES, Severity
+from app.models.review import Confidence
 
 SECURITY_REVIEW_SYSTEM_PROMPT = """\
 You are a security expert. Review the code for security vulnerabilities only.
@@ -15,8 +16,28 @@ STRUCTURED_REVIEW_SYSTEM_PROMPT = (
     "You are an expert code reviewer. Perform a thorough review covering "
     "correctness, security, performance, and code quality. Use the provided "
     "tool to submit your structured findings. Always populate detected_language "
-    "with the programming language you identify in the submitted code."
+    "with the programming language you identify in the submitted code. Report "
+    "each finding as its own item with a short title and an explanation, and "
+    "set file and line numbers whenever the code under review lets you locate it."
 )
+
+
+class FindingToolOutput(TypedDict):
+    """Shape of one finding Claude submits inside a `submit_code_review` list.
+
+    A typed mirror of `_FINDING_SCHEMA` — update both together. `id` and
+    `category` aren't asked of the model: the server generates the ID and
+    derives the category from the list the finding was submitted in.
+    """
+
+    title: str
+    explanation: str
+    confidence: Confidence
+    severity: NotRequired[Severity]
+    file: NotRequired[str]
+    line_start: NotRequired[int]
+    line_end: NotRequired[int]
+    suggestion: NotRequired[str]
 
 
 class ReviewToolOutput(TypedDict):
@@ -30,10 +51,64 @@ class ReviewToolOutput(TypedDict):
     summary: str
     severity: Severity
     score: int
-    bugs: list[str]
-    security_issues: list[str]
-    suggestions: list[str]
-    positives: list[str]
+    bugs: list[FindingToolOutput]
+    security_issues: list[FindingToolOutput]
+    suggestions: list[FindingToolOutput]
+    positives: list[FindingToolOutput]
+
+
+_FINDING_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": "A one-line headline for the finding.",
+        },
+        "explanation": {
+            "type": "string",
+            "description": "Why this matters, in one to three sentences.",
+        },
+        "severity": {
+            "type": "string",
+            "enum": list(SEVERITY_VALUES),
+            "description": "How serious the issue is. Omit for positives.",
+        },
+        "file": {
+            "type": "string",
+            "description": (
+                "Path of the file the finding is in, exactly as it appears in the "
+                "diff. Omit for pasted snippets or findings not tied to one file."
+            ),
+        },
+        "line_start": {
+            "type": "integer",
+            "minimum": 1,
+            "description": (
+                "First line the finding refers to: in the new version of the file "
+                "for a diff, or in the snippet as submitted. Omit if not tied to "
+                "specific lines."
+            ),
+        },
+        "line_end": {
+            "type": "integer",
+            "minimum": 1,
+            "description": (
+                "Last line the finding refers to; equal to line_start for a "
+                "single line."
+            ),
+        },
+        "suggestion": {
+            "type": "string",
+            "description": "A concrete fix or improvement, when there is one.",
+        },
+        "confidence": {
+            "type": "string",
+            "enum": [confidence.value for confidence in Confidence],
+            "description": "How sure you are that this finding is correct.",
+        },
+    },
+    "required": ["title", "explanation", "confidence"],
+}
 
 
 STRUCTURED_REVIEW_TOOL: anthropic.types.ToolParam = {
@@ -73,23 +148,23 @@ STRUCTURED_REVIEW_TOOL: anthropic.types.ToolParam = {
             },
             "bugs": {
                 "type": "array",
-                "items": {"type": "string"},
-                "description": "List of bugs or logical errors found in the code.",
+                "items": _FINDING_SCHEMA,
+                "description": "Bugs or logical errors found in the code.",
             },
             "security_issues": {
                 "type": "array",
-                "items": {"type": "string"},
-                "description": "List of security vulnerabilities or concerns.",
+                "items": _FINDING_SCHEMA,
+                "description": "Security vulnerabilities or concerns.",
             },
             "suggestions": {
                 "type": "array",
-                "items": {"type": "string"},
-                "description": "List of improvement suggestions.",
+                "items": _FINDING_SCHEMA,
+                "description": "Improvement suggestions.",
             },
             "positives": {
                 "type": "array",
-                "items": {"type": "string"},
-                "description": "List of things done well in the code.",
+                "items": _FINDING_SCHEMA,
+                "description": "Things done well in the code.",
             },
         },
         "required": [

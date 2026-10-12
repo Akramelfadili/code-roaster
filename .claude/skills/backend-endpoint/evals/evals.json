@@ -1,0 +1,23 @@
+{
+  "skill_name": "backend-endpoint",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "add a POST /repos endpoint that lists all indexed repositories for the current user with their indexing status",
+      "expected_output": "Endpoint listing indexed repos with latest status; flags that no user/ownership concept exists and that a read should be GET (or justifies POST for token-in-body); no leaking/faked scoping; tests follow conftest patterns.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "scaffold a new endpoint for fetching a single review job's status and result by id \u2014 GET /review/pr/{job_id}. the frontend needs it to show a finished review without opening the SSE stream",
+      "expected_output": "Reuses get_review_job, ReviewJobStatus and ReviewJobNotFoundError on the existing pr router; 404 on unknown id; no new exception or service duplication.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "add DELETE /index/{repo_id} so users can remove an indexed repo \u2014 it should delete the repo's chroma collection and all its indexing job rows, and refuse with 409 if indexing is currently running",
+      "expected_output": "Service function deletes rows + vector collection via VectorStore; reuses 409 exception; tests with mocks; flags lack of authorization (anyone can delete any repo).",
+      "files": []
+    }
+  ]
+}

@@ -14,7 +14,7 @@
 
 Paste any code snippet, pick a language, and Code Roaster sends it to Claude for a thorough review. You get back:
 
-- **A quality score** (0–100) with an overall severity rating
+- **A quality score** (1–10) with an overall severity rating
 - **Bugs** — logic errors, edge cases, incorrect assumptions
 - **Security issues** — common vulnerabilities and risky patterns
 - **Suggestions** — performance, readability, and best-practice improvements

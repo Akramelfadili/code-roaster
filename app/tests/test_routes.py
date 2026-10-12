@@ -1,5 +1,6 @@
 from httpx import AsyncClient
 
+from app.constants import MAX_CODE_CHARS
 from app.tests.mocks import SAMPLE_CODE
 
 
@@ -40,6 +41,26 @@ class TestReviewStructured:
         ):
             assert field in data
 
+    async def test_findings_are_serialized_as_objects(
+        self, client: AsyncClient
+    ) -> None:
+        response = await client.post("/review/structured", json={"code": SAMPLE_CODE})
+        suggestion = response.json()["suggestions"][0]
+        assert set(suggestion) == {
+            "id",
+            "category",
+            "severity",
+            "file",
+            "line_start",
+            "line_end",
+            "title",
+            "explanation",
+            "suggestion",
+            "confidence",
+        }
+        assert suggestion["category"] == "suggestion"
+        assert suggestion["line_start"] == 1
+
     async def test_score_is_between_1_and_10(self, client: AsyncClient) -> None:
         response = await client.post("/review/structured", json={"code": SAMPLE_CODE})
         assert 1 <= response.json()["score"] <= 10
@@ -53,3 +74,15 @@ class TestReviewStructured:
         assert response.status_code == 422
         errors = response.json()["detail"]
         assert any("empty" in e["msg"].lower() for e in errors)
+
+    async def test_code_over_max_length_returns_422(self, client: AsyncClient) -> None:
+        code = "x" * (MAX_CODE_CHARS + 1)
+        response = await client.post("/review/structured", json={"code": code})
+        assert response.status_code == 422
+        errors = response.json()["detail"]
+        assert any(e["type"] == "string_too_long" for e in errors)
+
+    async def test_code_at_max_length_is_accepted(self, client: AsyncClient) -> None:
+        code = "x" * MAX_CODE_CHARS
+        response = await client.post("/review/structured", json={"code": code})
+        assert response.status_code == 200

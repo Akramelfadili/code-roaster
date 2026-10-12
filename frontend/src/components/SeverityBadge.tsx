@@ -1,3 +1,5 @@
+import type { JSX } from 'react/jsx-runtime';
+
 import { SEVERITY_STYLES } from '@/constants/review';
 import type { Severity } from '@/types/review';
 

@@ -8,13 +8,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
+from app.constants import INTERNAL_SERVER_ERROR_MESSAGE
+from app.database import SessionFactory, engine, init_db
 from app.exceptions import AppError
 from app.routes.auth import router as auth_router
 from app.routes.health import router as health_router
+from app.routes.index import router as index_router
 from app.routes.pr import router as pr_router
 from app.routes.review import router as review_router
+from app.services.chunker import CodeChunker
+from app.services.embedder import Embedder
 from app.services.github import GitHubService
+from app.services.indexer import RepoIndexer
+from app.services.indexing_jobs import fail_orphaned_indexing_jobs
+from app.services.retriever import CodeRetriever
+from app.services.review_jobs import fail_orphaned_review_jobs
 from app.services.reviewer import CodeReviewer
+from app.services.vector_store import VectorStore
 
 load_dotenv()
 
@@ -26,12 +36,37 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    app.state.reviewer = CodeReviewer()
+    await init_db()
+    app.state.session_factory = SessionFactory
+    orphaned_repo_ids = await fail_orphaned_indexing_jobs(SessionFactory)
+    if orphaned_repo_ids:
+        logger.warning(
+            f"Marked {len(orphaned_repo_ids)} orphaned indexing job(s) as failed: "
+            f"{', '.join(orphaned_repo_ids)}"
+        )
+    orphaned_review_job_ids = await fail_orphaned_review_jobs(SessionFactory)
+    if orphaned_review_job_ids:
+        logger.warning(
+            f"Marked {len(orphaned_review_job_ids)} orphaned review job(s) as "
+            f"failed: {', '.join(str(job_id) for job_id in orphaned_review_job_ids)}"
+        )
     app.state.github_service = GitHubService(
         client_id=settings.github_client_id,
         client_secret=settings.github_client_secret,
     )
+    embedder = Embedder()
+    app.state.indexer = RepoIndexer(
+        github_service=app.state.github_service,
+        chunker=CodeChunker(),
+        embedder=embedder,
+        vector_store_factory=VectorStore,
+    )
+    app.state.retriever = CodeRetriever(
+        embedder=embedder, vector_store_factory=VectorStore
+    )
+    app.state.reviewer = CodeReviewer(retriever=app.state.retriever)
     yield
+    await engine.dispose()
 
 
 app = FastAPI(
@@ -68,8 +103,9 @@ async def app_error_handler(req: Request, exc: AppError) -> JSONResponse:
     logger.log(
         exc.log_level, message, exc_info=exc if exc.log_level >= logging.ERROR else None
     )
-    detail = exc.user_message if exc.user_message is not None else str(exc)
-    return JSONResponse(status_code=exc.status_code, content={"detail": detail})
+    return JSONResponse(
+        status_code=exc.status_code, content={"detail": exc.client_message}
+    )
 
 
 @app.exception_handler(Exception)
@@ -92,10 +128,13 @@ async def unhandled_exception_handler(req: Request, exc: Exception) -> JSONRespo
         exc,
         exc_info=exc,
     )
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    return JSONResponse(
+        status_code=500, content={"detail": INTERNAL_SERVER_ERROR_MESSAGE}
+    )
 
 
 app.include_router(review_router)
 app.include_router(auth_router)
 app.include_router(pr_router)
 app.include_router(health_router)
+app.include_router(index_router)

@@ -1,313 +1,166 @@
 # Code Roaster — CLAUDE.md (Backend)
 
 ## Stack
-Python 3.12, FastAPI, Anthropic SDK, Pydantic v2, conda environment
+Python 3.12, FastAPI, Anthropic SDK, Pydantic v2, Voyage AI (embeddings), Chroma (vector store), Postgres via SQLAlchemy 2 async (`asyncpg`) + Alembic, conda environment `code-roaster`
 
 ## Project Structure
 ```
 app/
 ├── __init__.py
+├── main.py              # App setup, lifespan, logging config, and the exception handlers
 ├── config.py            # Settings — all env-loaded config, see "Configuration"
-├── constants.py        # All magic strings/numbers used anywhere in app/ (e.g. Severity, ANTHROPIC_MODEL, ANTHROPIC_MAX_TOKENS) — single source of truth, not just for values shared across multiple files
-├── exceptions.py       # AppError base + all domain exceptions — see "Error Handling"
+├── database.py          # Async engine, SessionFactory, Base, enum_values, get_db/DbSession/FunctionScopedDbSession, init_db — see "Database"
+├── constants.py         # Named constants shared across app/ (Severity, ANTHROPIC_MODEL, ...)
+├── exceptions.py        # AppError base + all domain exceptions, incl. V5 agent errors — see claude-docs/error-handling.md
+├── pytest.ini           # asyncio_mode = auto, testpaths = tests
+├── requirements.txt     # Runtime dependencies
+├── requirements-dev.txt # pytest, ruff, mypy, bandit, pre-commit
+├── README.md
 ├── models/
-│   ├── review.py        # Review request/response models
-│   └── pr.py             # PullRequestRef, PR review request models
+│   ├── __init__.py
+│   ├── review.py        # Review request/response models, Finding + FindingCategory/Confidence
+│   ├── pr.py            # PullRequestRef, PR review request models
+│   ├── index.py         # IndexRepoRequest, IndexingJobStatus, IndexingSummary
+│   ├── review_job.py    # ReviewJobCreated, ReviewJobStatus, ReviewEventMessage (the SSE payload)
+│   └── db/              # SQLAlchemy ORM tables — importing the package registers them on Base.metadata
+│       ├── indexing.py  # IndexingJob (`indexing_jobs` table)
+│       └── review.py    # ReviewJob (`reviews`) + ReviewEvent (`review_events`, the job's event log)
+├── migrations/          # Alembic env.py, script template, versions/ — config in root alembic.ini
 ├── prompts/
-│   └── review.py         # System prompts + STRUCTURED_REVIEW_TOOL schema for CodeReviewer
+│   ├── __init__.py
+│   └── review.py        # System prompts, STRUCTURED_REVIEW_TOOL schema, ReviewToolOutput/FindingToolOutput
 ├── services/
-│   ├── reviewer.py        # CodeReviewer class — all AI logic lives here
-│   ├── github.py          # GitHubService — OAuth token exchange, PR URL parsing, diff fetch, repo file fetch
-│   ├── github_errors.py   # GitHub-specific error translation (raise_for_github_response, is_rate_limited)
-│   ├── chunker.py         # CodeChunker + Chunk — splits source files into chunks for the RAG pipeline
-│   ├── embedder.py        # Embedder — turns Chunks into vectors via Voyage AI
-│   ├── vector_store.py    # VectorStore — persists and searches chunk embeddings via Chroma
-│   └── indexer.py         # RepoIndexer + IndexingResult — orchestrates fetch → chunk → embed → store
-└── routes/
-    ├── __init__.py
-    ├── review.py       # /review/stream, /review/structured
-    ├── auth.py         # /auth/github, /auth/github/callback — GitHub OAuth
-    ├── pr.py           # /review/pr — PR diff review
-    └── health.py       # /health
-main.py              # App setup, lifespan, logging config, and the exception handlers
+│   ├── __init__.py
+│   ├── reviewer.py      # CodeReviewer — all LLM calls; PR review consumes context from CodeRetriever
+│   ├── github.py        # GitHubService — OAuth token exchange, PR URL parsing, diff fetch, repo file fetch
+│   ├── github_errors.py # raise_for_github_response, is_rate_limited
+│   ├── chunker.py       # CodeChunker + Chunk — splits source files for the RAG pipeline
+│   ├── embedder.py      # Embedder — Chunks → vectors via Voyage AI
+│   ├── vector_store.py  # VectorStore — persists and searches embeddings via Chroma
+│   ├── indexer.py       # RepoIndexer + IndexingResult — fetch → chunk → embed → store
+│   ├── retriever.py     # CodeRetriever — query → embed → search; the only place retrieval happens
+│   ├── indexing_jobs.py # create/get indexing jobs + run_indexing_job — job state read/written in Postgres
+│   └── review_jobs.py   # create/get/run review jobs + stream_review_events — see "Review Jobs"
+├── routes/
+│   ├── __init__.py
+│   ├── review.py        # /review/stream, /review/structured
+│   ├── auth.py          # /auth/github, /auth/github/callback — GitHub OAuth
+│   ├── pr.py            # /review/pr (sync), /review/pr/async + /review/pr/{job_id}/events (job + SSE)
+│   ├── index.py         # /index/repo, /index/status/{repo_id} — background repo indexing
+│   └── health.py        # /health
+└── tests/               # conftest.py, mocks.py, one test_<module>.py per module — see claude-docs/testing.md
 ```
 
 ## Imports
-- Always use absolute imports starting from the project root (e.g. `from app.models import X`)
-- Never use relative imports with `..`
+- Always use absolute imports from the project root (`from app.models import X`) — never relative imports with `..`
 
 ## Python Standards
-- No magic strings or numbers — define them as named constants in `app/constants.py`
-- Type hints on every function — always
+- Constants referenced by more than one module live in `app/constants.py`; module-private tuning values (chunk sizes, Voyage model name, batch size) stay module-local
 - Docstrings on every class and public method
-- No `Any` type — ever
-- Explicit return types on all functions
+- `#` comments only explain *why* (decisions, limitations, workarounds) — never restate the code, log a fix, divide sections or keep commented-out code. Full rule in root CLAUDE.md
 - f-strings for string formatting
 - `pathlib` over `os.path`
+- Type hints, explicit return types, and no `Any` are enforced by mypy strict
 
 ## FastAPI Standards
 - Pydantic models for all request/response bodies — never raw dicts
 - Input validation lives in Pydantic models (`field_validator`), not routes
-- HTTPException with clear status codes and messages
-- Lifespan for startup/shutdown (not deprecated @app.on_event)
-- Router prefix and tags on all routers
-- One router per domain (review, auth, etc.)
+- Lifespan for startup/shutdown (not deprecated `@app.on_event`); shared services live on `app.state`
+- Router prefix and tags on all routers; one router per domain (review, auth, pr, index, health)
 
 ## Configuration
-- All configuration comes from `Settings` (`app/config.py`), loaded once from env vars / `.env` — never call `os.environ`/`os.getenv` directly anywhere else in `app/`
-- New config values (API keys, client secrets, feature toggles) get added as typed fields on `Settings`, not read ad hoc where they're used
+- All configuration comes from `Settings` (`app/config.py`), loaded once from env vars / `.env` — never call `os.environ`/`os.getenv` anywhere else in `app/`
+- New config values (API keys, client secrets, feature toggles) are added as typed fields on `Settings`
+
+## Database
+**Rule: all job state lives in Postgres, never in memory.** No job status, progress or result on `app.state`, in module globals or in caches — `app.state` holds services and the `session_factory` only. Rationale: `ARCHITECTURE.md` §3.8.
+
+- `app/database.py` is the only place an engine or session factory is created. Routes get a session with the `DbSession` dependency (`Annotated[AsyncSession, Depends(get_db)]`); `get_db` reads `app.state.session_factory`
+- **Streaming (SSE) routes use `FunctionScopedDbSession`, never `DbSession`.** `DbSession` stays open until the response ends, so a minutes-long stream would hold a pooled connection the whole time. `FunctionScopedDbSession` closes before the body streams. The stream itself opens a short session per poll from `app.state.session_factory`. Any dependency that takes it must also be declared `Depends(..., scope="function")`
+- Background tasks never reuse the request's session (it is closed by then) — they receive `app.state.session_factory` as an argument and open a short session per write
+- ORM tables live in `app/models/db/` and inherit `Base`; a new table module must be imported in `app/models/db/__init__.py` so Alembic (and the test fixture's `create_all`) see it. API responses stay Pydantic — the service maps rows to response models, routes never return ORM objects
+- DB access lives in services (`app/services/`), never in routes. Translate DB errors the caller can act on into domain exceptions in the service (pattern: `IntegrityError` → `IndexingAlreadyInProgressError` in `create_indexing_job`)
+- Enforce invariants in the schema (unique/partial indexes, `NOT NULL`), not with check-then-write code — a check in Python races across workers
+- Store `StrEnum`s as their lowercase values (`Enum(..., values_callable=enum_values)`), timestamps as `DateTime(timezone=True)`. An enum that will keep growing (`ReviewEventType`) uses `native_enum=False`, a `VARCHAR`, so a new value needs no migration. Closed sets (job states) stay native Postgres enums
+- **Schema setup** (`init_db`, called by the lifespan): always `alembic upgrade head`, in every environment. Never add a `create_all` shortcut to app code — it never alters existing tables and drifts from the migrations
+- **Orphaned jobs** (`fail_orphaned_indexing_jobs` and `fail_orphaned_review_jobs`, called by the lifespan after `init_db`): `pending`/`running` jobs not updated for `INDEXING_JOB_TIMEOUT_SECONDS` / `REVIEW_JOB_TIMEOUT_SECONDS` become `failed` with the matching `*_ORPHANED_ERROR`; swept review jobs also get their terminal `failed` event. Every job type with in-process execution needs the same sweep, wired in the lifespan, and its runner must update `updated_at` more often than the timeout
+- **Every model change ships with a migration**, run from the project root:
+  - `alembic revision --autogenerate -m "describe change"` → review the file in `app/migrations/versions/` (autogenerate misses some things, e.g. enum value changes)
+  - `alembic upgrade head` / `alembic downgrade -1`; `alembic check` fails if models and migrations have drifted
+  - Migrations are frozen snapshots: write literals in them, never import `app.constants`
+- A model change isn't live, even in development, until its migration exists — the app only ever runs migrations
+
+## Review Jobs
+`POST /review/pr/async` → `reviews` row + `202 {job_id}` + `run_review_job` in `BackgroundTasks`; `GET /review/pr/{job_id}/events` streams the job over SSE. The synchronous `POST /review/pr` stays as is. Design and event table: `ARCHITECTURE.md` §3.9.
+
+| Event `type` (`ReviewEventType`) | `data` |
+|---|---|
+| `retrieving`, `reviewing` | `null` — emitted from `CodeReviewer`'s `on_stage` callback |
+| `finding` | one `Finding`, as `model_dump(mode="json")` |
+| `completed` (terminal) | the full `StructuredReviewResponse` (also stored in `reviews.result`) |
+| `failed` (terminal) | `{"error": <client_message or INTERNAL_SERVER_ERROR_MESSAGE>}` |
+
+- **Every step is an event in `review_events`. Never push events through memory** (no queues, no `asyncio.Event`s on `app.state`). The SSE stream only polls the table, which is what makes it work across workers and lets clients resume with `Last-Event-ID`
+- **Write a state change and its event in one transaction** through `_record_events`. It also bumps `updated_at`, which keeps a live job from being swept
+- **Every job ends with exactly one terminal event** (`completed` or `failed`); `stream_review_events` stops on it. A new failure path must go through `_mark_failed`, and a new sweep must append the `failed` event
+- **Adding an event type** (e.g. a V5 agent step): add it to `ReviewEventType` (no migration — `type` is a `VARCHAR`), document its `data` shape here and in `ARCHITECTURE.md` §3.9, and add it to the frontend schema when a client consumes it. Never reuse an existing type for a different payload
+- **The runner fetches the diff before it retrieves any context.** `repo_id` comes from the parsed PR URL, never from the client, and is only used once `fetch_pr_diff` has succeeded with the caller's token. The GitHub token is a background task argument, never stored on the row
+- **SSE route shape:** `response_class=EventSourceResponse`, an async generator that yields `ServerSentEvent(data=<ReviewEventMessage>, id=str(event.id))`. Check the job exists in a function-scoped dependency, so a miss is a JSON 404 before the stream starts
 
 ## External API Calls
-- Any class that talks to an external API or SDK — the GitHub REST API, the Anthropic SDK, anything added later — lives under `app/services/`. No exceptions for how central it is to the product (`CodeReviewer` included): one flat rule beats a "core vs. adapter" distinction that only makes sense in hindsight
-- `httpx.AsyncClient` for all outbound HTTP calls (GitHub API, OAuth endpoints, etc.) — never the sync client, never `requests`
-- Wrap calls in a service class under `app/services/` — routes never call `httpx` directly
-- Accept an optional `transport: httpx.AsyncBaseTransport | None` on service constructors so tests can inject `httpx.MockTransport` instead of hitting the network
-- Translate HTTP status codes into domain exceptions inside the service — never let a raw `httpx` exception or status code reach a route. See `app/services/github_errors.py`'s `raise_for_github_response` for the pattern: one function that maps a response's status code to the right `AppError` subclass, called by every method that makes an API call, instead of each method hand-rolling its own status-code branching
+- Every class that talks to an external API or SDK lives under `app/services/` — no exceptions, `CodeReviewer` included
+- `httpx.AsyncClient` for all outbound HTTP — never the sync client, never `requests`; routes never call `httpx` directly
+- Service constructors accept an optional `transport: httpx.AsyncBaseTransport | None` (or an SDK `client`) so tests inject fakes
+- Translate status codes into domain exceptions inside the service, in one function called by every method (pattern: `raise_for_github_response` in `app/services/github_errors.py`)
 
 ## Anthropic SDK Standards
-- Always use `ANTHROPIC_MODEL` from `app/constants.py` (currently `claude-sonnet-4-6`) unless there's a specific reason not to
-- Always include `cache_control: ephemeral` on system prompts
-- Use `AsyncAnthropic` — never the sync client
-- Streaming for text responses, `create()` for structured output
+- Use `ANTHROPIC_MODEL` from `app/constants.py` (currently `claude-sonnet-4-6`) unless there's a specific reason not to
+- `AsyncAnthropic` only — never the sync client
+- Streaming for text responses, `create()` with a tool schema for structured output
+- `cache_control: ephemeral` on every system prompt
 - Handle `RateLimitError` and `APIError` explicitly
-- Log token usage on every call
+- Check `stop_reason` after every call through `_raise_if_truncated`: `max_tokens` raises `OutputTruncatedError`, never a partial result
+- Log token usage and approximate cost on every call through `_log_usage` in `reviewer.py`; never send more context than needed
+- Pricing constants (`ANTHROPIC_*_COST_PER_MTOK_USD`) are for `ANTHROPIC_MODEL`, so change them whenever the model changes
 
-## RAG Pipeline
+## Input Caps & Cost Budget
+**Rule: no LLM or embedding call takes unbounded input.** Agents multiply calls per run, so an uncapped input can drain the API balance. Rationale: `ARCHITECTURE.md` §3.10. All caps live in `app/constants.py`.
 
-The codebase-indexing feature embeds a repository's source and retrieves relevant
-context at review time. Its stages (chunk → embed → store → retrieve) all pass the
-same unit around.
+| Input | Cap | Enforced in | On overflow |
+|---|---|---|---|
+| `ReviewRequest.code` | `MAX_CODE_CHARS` = 50,000 | `Field(max_length=...)` | `422` |
+| `ReviewRequest.language` | `MAX_LANGUAGE_CHARS` = 500 | `Field(max_length=...)` | `422` |
+| `PRReviewRequest.pr_url` | `MAX_PR_URL_CHARS` = 500 | `Field(max_length=...)` | `422` |
+| PR diff | `MAX_DIFF_CHARS` = 100,000 | `GitHubService.fetch_pr_diff` | Truncated, WARNING logged |
+| Retrieved context | `MAX_CONTEXT_CHARS` = 20,000 | `_fit_context_budget` in `reviewer.py` | Lowest-ranked chunks dropped, WARNING logged |
+| Embedding query | `MAX_QUERY_CHARS` = 10,000 | `Embedder.embed_query` | Truncated, WARNING logged |
 
-### `Chunk` — the standard data structure
+- **Client input is rejected and server-built input is truncated.** A user can fix an oversized request field, so it gets a `422`. A diff, context or query the server fetches or builds is cut down so the review still runs. Truncation logs at WARNING (a documented exception to "services never log", like retrieval)
+- **A new LLM or embedding call path needs a cap before it ships.** Add the constant to `app/constants.py`, enforce it at the boundary (Pydantic field for client input, the service for fetched or built input), and add a row here
+- **Cost is logged, not yet enforced.** `settings.daily_cost_budget_usd` (env `DAILY_COST_BUDGET_USD`, default `10.0`) and `BudgetExceededError` (`429`, `user_message` "Request exceeds cost budget.") exist, but nothing sums spend or raises the error yet. When enforcement lands, the running total goes in Postgres, never in memory (see *Database*)
 
-`Chunk` (`app/services/chunker.py`) is a frozen, slotted dataclass and the one
-type every RAG stage exchanges. Do not introduce a parallel "code fragment" /
-"snippet" type — extend `Chunk`, or wrap it, instead.
+## Review Findings
+Every item in `bugs`, `security_issues`, `suggestions` and `positives` is a `Finding` (`app/models/review.py`) — never a plain string. Contract and rationale: `ARCHITECTURE.md` §3.7.
 
-| Field | Type | Meaning |
+| Field | Type | Set by |
 |---|---|---|
-| `content` | `str` | The slice's source text, newline-joined |
-| `file_path` | `str` | Path of the source file, exactly as passed to `chunk_file` (never re-read from disk) |
-| `start_line` | `int` | 1-indexed first line, inclusive |
-| `end_line` | `int` | 1-indexed last line, inclusive |
-| `language` | `str` | Canonical language name — one of `CodeChunker.SUPPORTED_LANGUAGES` |
+| `id` | `str` (UUID4, `default_factory`) | Server |
+| `category` | `FindingCategory`: `bug` / `security` / `suggestion` / `positive` | Server — from the tool list the finding came in |
+| `severity` | `Severity \| None` — omitted for positives | Claude |
+| `file`, `line_start`, `line_end` | `str \| None`, `int \| None` (≥ 1) | Claude |
+| `title`, `explanation` | `str` (required) | Claude |
+| `suggestion` | `str \| None` | Claude |
+| `confidence` | `Confidence`: `low` / `medium` / `high` (required) | Claude |
 
-### Chunking strategy
-
-`CodeChunker.chunk_file(file_path, content, language)` returns `list[Chunk]` in
-source order, applying, per file:
-
-1. **Definition-aligned split (preferred).** Lines are cut into segments at each
-   `function`/`class`-style definition for the language (regex-based, one pattern
-   per language). Lines before the first definition (imports, `package`/`use`
-   declarations) form a leading segment. Adjacent segments are then merged while
-   the combined span stays within the **max chunk size (100 lines)**, so small
-   helpers group together and large ones stand alone.
-2. **Fixed-size fallback.** Any single definition longer than 100 lines, and any
-   file whose language exposes no recognisable definitions, is windowed into
-   **50-line chunks overlapping by 10 lines**.
-3. **Minimum size.** Chunks shorter than **5 lines** are dropped. A blank file,
-   or one that yields only sub-5-line fragments, produces `[]`.
-
-Supported languages (case-insensitive, common aliases like `ts`/`golang`
-resolved): **Python, TypeScript, JavaScript, Go, Rust, Java**. An unsupported
-language raises `ValueError` — it's a caller contract violation, not a modelled
-domain failure, so it is not an `AppError` subclass.
-
-Size thresholds default from module constants but are constructor-overridable
-(`CodeChunker(max_chunk_lines=..., fixed_chunk_size_lines=..., ...)`) for tests
-and tuning.
-
-### Embedding
-
-`Embedder` (`app/services/embedder.py`) is the chunk → vector stage. It wraps
-Voyage AI's async client (`voyageai.AsyncClient`, keyed with `voyage_api_key`
-from `Settings`) and the `voyage-code-3` model — Voyage AI's strongest
-code-embedding model.
-
-- `embed_chunks(chunks: list[Chunk]) -> list[list[float]]` embeds each chunk's
-  `content` as a `document` vector, one per chunk, in input order. Requests are
-  batched at **128 inputs** (Voyage AI's per-request limit); an empty list makes
-  no API call.
-- `embed_query(query: str) -> list[float]` embeds a single search string as a
-  `query` vector for retrieval time. Documents and queries are embedded with
-  their matching `input_type` so they share one vector space.
-- Both methods are `async` (the rest of the app is async, and the underlying
-  `voyageai.AsyncClient.embed` is a coroutine).
-- Voyage AI failures are translated in one place (`Embedder._embed`):
-  `voyageai.error.RateLimitError` → `AIProviderRateLimitError`, any other
-  `voyageai.error.VoyageError` → `AIProviderError`. Token usage is logged on
-  every call.
-- The constructor takes an optional `client` so tests inject a fake instead of
-  hitting the API. Model name, batch size, and the `input_type` values are
-  module-local constants, not in `app/constants.py` (nothing else refers to
-  them — same rationale as the chunker's thresholds).
-
-### Vector storage
-
-`VectorStore` (`app/services/vector_store.py`) is the store/retrieve stage —
-it wraps a persistent Chroma collection (`chromadb.PersistentClient`), one
-collection per repository.
-
-- The constructor takes `collection_name: str` (callers scope this per
-  repository so chunks from different repos never mix) and
-  `persist_directory: str`, defaulting to `data/chroma` at the project root
-  (relative to the process's working directory, which is the project root
-  for every `make`/`uvicorn` entry point). `data/chroma` is gitignored —
-  it's local, rebuildable index data, not source.
-- `add_chunks(chunks: list[Chunk], embeddings: list[list[float]]) -> None`
-  upserts each chunk's vector, source text, and metadata
-  (`file_path`, `start_line`, `end_line`, `language`) under a deterministic
-  ID, `{file_path}:{start_line}:{end_line}`. Re-adding the same file range
-  overwrites the existing record instead of duplicating it, so re-indexing is
-  idempotent. Raises `ValueError` if `chunks` and `embeddings` differ in
-  length — a caller contract violation, not a modelled domain failure, so it
-  is not an `AppError` subclass (same rationale as the chunker's unsupported
-  language check). A no-op for an empty `chunks` list.
-- `search(query_embedding: list[float], n_results: int = 5) -> list[Chunk]`
-  returns the `n_results` chunks nearest the query vector, most similar
-  first, reconstructed from their stored content and metadata.
-- `delete_collection() -> None` drops every vector in the collection — call
-  it before re-indexing a repository. A no-op if the collection doesn't
-  exist yet.
-- `collection_exists() -> bool` reports whether the collection exists *and*
-  holds at least one document.
-
-### Fetching repository files
-
-`GitHubService.fetch_repo_files(repo_url: str, token: str) -> list[tuple[str, str]]`
-(`app/services/github.py`) is the fetch stage's entry point. It walks the
-repo's default-branch file tree via the GitHub API, keeps only files whose
-extension is in `SUPPORTED_CODE_EXTENSIONS` (`app/constants.py`), and returns
-each as a `(file_path, content)` tuple, decoded as UTF-8 — binary files that
-fail to decode are silently skipped. Raises `InvalidRepoUrlError` for a
-malformed `repo_url`, `RepoNotFoundError` for a 404, and the usual
-`GitHubAuthError` / `GitHubRateLimitError` / `GitHubError` translation shared
-with the rest of `GitHubService`, via `raise_for_github_response`.
-
-### Orchestration
-
-`RepoIndexer` (`app/services/indexer.py`) wires the four stages together.
-Its constructor takes `github_service`, `chunker`, `embedder`, and
-`vector_store` as explicit dependencies (no defaults — callers assemble the
-pipeline). `index_repository(repo_url: str, github_token: str) ->
-IndexingResult` runs fetch → chunk → embed → store in sequence, logging
-progress at each step, and returns an `IndexingResult` (`repo_url`,
-`files_processed`, `chunks_created`, `chunks_stored`, `duration_seconds`).
-Files over `MAX_INDEXABLE_FILE_LINES` (`app/constants.py`, 500) are skipped
-before chunking — too large to be a useful, focused piece of retrieval
-context. Each file's language is looked up from its extension via
-`EXTENSION_TO_LANGUAGE` (`app/constants.py`), which `GitHubService` and
-`RepoIndexer` both key off so the two stages agree on what "supported" means.
-`GitHubService` already filters to `SUPPORTED_CODE_EXTENSIONS` before
-returning files, but `RepoIndexer` doesn't trust that as a precondition — any
-file whose extension isn't in `EXTENSION_TO_LANGUAGE` is skipped defensively
-rather than looked up, so a gap between the two filters fails soft, not with
-a `KeyError`.
-
-## Error Handling
-
-- Never let raw exceptions bubble up to the client
-- Routes and services never catch exceptions and never log — they just raise. Logging and HTTP translation both happen in exactly one place: `main.py`'s exception handlers
-- All domain exceptions subclass `AppError` (`app/exceptions.py`). FastAPI resolves exception handlers by walking the exception's MRO, so the single handler registered on `AppError` in `main.py` also catches every subclass (`GitHubError`, `PRNotFoundError`, `AIProviderError`, ...) automatically — **adding a new failure mode never requires a new handler function in `main.py`**, just a new exception class
-- Anything that isn't an `AppError` subclass (an unmodeled bug) is caught by a second handler, `unhandled_exception_handler` in `main.py` — it always logs at ERROR with a full traceback and always returns a generic 500, never the real exception message, since it wasn't written with a client in mind
-
-**To add a new domain exception:**
-1. Subclass `AppError` directly, or an existing domain subclass (`GitHubError`, `ReviewError`) if it belongs there
-2. Set `status_code` — required
-3. Optionally override `log_level`: `logging.WARNING` for expected, user-fixable states (bad input, expired token, not found — no traceback attached); leave the `logging.ERROR` default for anything that signals a bug or an outage (attaches a full traceback)
-4. Optionally override `user_message`: leave `None` to show the exception's own message to the client (safe for expected/actionable errors); set a fixed string to hide the real message instead (for unexpected/infra failures where the internal detail isn't useful, or safe, to expose)
-5. Raise it with `raise SomeError("message")` — no logging call needed. Pass `debug_context="..."` for extra diagnostic detail (e.g. a raw API response body) that should be logged but never sent to the client
-
-- `main.py` calls `logging.basicConfig(...)` once at import time — without it, `logging.getLogger(__name__)` calls anywhere in the app print bare, unformatted messages (no level, no timestamp, no logger name) via Python's fallback handler. Don't remove it, and don't add a second `basicConfig` call elsewhere
-- Services translate *what went wrong* into the right exception type; `main.py` alone handles *logging and responding*. If you're tempted to add a `logger.error(...)` call inside a service or route, that's a sign the failure needs a new/adjusted `AppError` subclass instead
-- **Exception:** streaming endpoints (`CodeReviewer.review_stream`) log directly in the service before re-raising. Once response bytes have started flowing, `main.py`'s handler can no longer translate the failure into a clean JSON error, so the service logs with full context inline instead of relying on the central handler
-
-## Cost Optimization
-- Cache system prompts with `cache_control: ephemeral`
-- Use Haiku for simple/cheap tasks, Sonnet for everything else
-- Never send more context than needed
-- Log input/output token counts for every API call
-
-## Naming Conventions
-- Classes: PascalCase
-- Functions/variables: snake_case
-- Constants: UPPER_SNAKE_CASE
-- Files: snake_case
-
-## Testing
-
-**Stack:** `pytest`, `pytest-asyncio`, `httpx` — install from `requirements-dev.txt`
-
-**Run the suite:**
-```
-conda run -n code-roaster python -m pytest tests/ -v
-```
-
-**Folder structure:** one `test_<module>.py` per route module or service under test (e.g. `routes/pr.py` → `test_pr.py`, `services/github.py` → `test_github_service.py`). Shared fixtures live in `conftest.py`, shared mock data in `mocks.py` — never duplicate a fixture inside an individual test file.
-
-**Async tests:** `pytest.ini` sets `asyncio_mode = auto` — no `@pytest.mark.asyncio` needed. All async test functions are picked up automatically.
-
-**Mocking the Anthropic client:**
-- Never instantiate a real `CodeReviewer` in tests — it requires `ANTHROPIC_API_KEY` and hits the API
-- `ASGITransport` does NOT trigger the FastAPI lifespan, so set `app.state.reviewer` directly in the fixture
-- Use `MagicMock(spec=CodeReviewer)` as the base; set `review_structured` as `AsyncMock`; set `review_stream` as `MagicMock(side_effect=async_gen_fn)` since it returns an async generator (not a coroutine)
-
-**Mocking GitHub calls:**
-- Never hit the real GitHub API in tests
-- At the route level: use `MagicMock(spec=GitHubService)` (the `mock_github_service` fixture), same pattern as `mock_reviewer` — set `app.state.github_service` in the `client` fixture
-- At the service level: inject `httpx.MockTransport(handler)` via `GitHubService(..., transport=...)` and assert on the returned data or raised domain exception
-
-**Naming:** `test_<what>_<expected_outcome>` — e.g. `test_empty_code_returns_422`, `test_happy_path_returns_all_fields`
-
-**Group tests by endpoint** using classes: `class TestReview`, `class TestReviewStream`, `class TestReviewStructured`
+- **`id` and `category` are always set server-side, never by Claude.** Keep them out of `_FINDING_SCHEMA` and `FindingToolOutput`; `CodeReviewer` stamps the category from the list and `Finding` generates the ID. Never read either from tool input
+- `_FINDING_SCHEMA` (tool JSON schema) and `FindingToolOutput` (its TypedDict mirror) in `app/prompts/review.py` change together — and together with `Finding` and the frontend `FindingSchema`
+- Build findings only through `Finding.model_validate` in `CodeReviewer`. A non-object item or a `ValidationError` becomes `MalformedAIResponseError` — never let a raw `TypeError`/`ValidationError` escape
+- Adding a field: optional (`| None = None`) unless the review is useless without it — a required field Claude omits fails the whole review
 
 ## Code Quality
+- Pre-commit runs ruff (lint + format), mypy (strict) and bandit on staged `.py` files — configs live at the project root (`ruff.toml`, `mypy.ini`, `.bandit`, `.pre-commit-config.yaml`)
+- Run checks via `make lint-back`, `make format-back`, `make type-back`, `make security-back` (see root CLAUDE.md)
+- `git commit --no-verify` only when a hook is broken by an environment issue — never to bypass a real lint/type error
 
-Four tools enforce quality automatically on every commit via pre-commit. Activate the conda env before committing — the `mypy` and `bandit` hooks run in isolated environments, but the other two (`ruff`) are self-contained.
-
-### Tools
-
-**Ruff** — linter and formatter (replaces flake8, isort, black)
-- Config: `ruff.toml` at project root
-- Rules: `E/F` (pycodestyle/pyflakes), `I` (isort), `N` (naming), `UP` (pyupgrade), `S` (security), `B` (bugbear), `C4` (comprehensions), `PTH` (pathlib)
-- `S101` (assert-in-test) is suppressed in `**/tests/**`
-
-**Mypy** — static type checker in strict mode
-- Config: `mypy.ini` at project root (`strict = true`, `python_version = 3.12`)
-- Strict means: no untyped defs, no implicit `Any`, explicit return types on everything
-
-**Bandit** — security-focused AST scanner
-- Config: `.bandit` at project root
-- Skips `app/tests/` (via pre-commit `exclude` pattern)
-
-**Pre-commit** — runs all of the above on staged files before every commit
-- Config: `.pre-commit-config.yaml` at project root
-- Hook order: trailing-whitespace → end-of-file-fixer → ruff lint → ruff format → mypy → bandit
-
-### Run manually
-
-```bash
-# Lint and auto-fix
-conda run -n code-roaster python -m ruff check app/ --fix
-
-# Format
-conda run -n code-roaster python -m ruff format app/
-
-# Type check
-conda run -n code-roaster python -m mypy app/
-
-# Security scan (excluding tests)
-conda run -n code-roaster python -m bandit -c .bandit -r app/ -x app/tests
-
-# Run all hooks against every file
-conda run -n code-roaster pre-commit run --all-files
-```
-
-### Skip hooks (emergency only)
-
-```bash
-git commit --no-verify -m "chore: ..."
-```
-
-Only use `--no-verify` if a hook is broken by an environment issue, never to bypass a real lint/type error.
+@claude-docs/error-handling.md
+@claude-docs/rag-pipeline.md

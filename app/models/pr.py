@@ -1,6 +1,8 @@
 from typing import NamedTuple
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
+
+from app.constants import MAX_PR_URL_CHARS
 
 
 class PullRequestRef(NamedTuple):
@@ -12,7 +14,7 @@ class PullRequestRef(NamedTuple):
 
 
 class PRReviewRequest(BaseModel):
-    pr_url: str
+    pr_url: str = Field(max_length=MAX_PR_URL_CHARS)
     github_token: str
 
     @field_validator("pr_url")

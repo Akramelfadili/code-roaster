@@ -1,7 +1,9 @@
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.constants import IndexingStage
 from app.exceptions import RepoNotFoundError
 from app.services.chunker import Chunk, CodeChunker
 from app.services.embedder import Embedder
@@ -28,7 +30,10 @@ def _make_indexer(
     mock_embedder = MagicMock(spec=Embedder)
     mock_embedder.embed_chunks = AsyncMock(return_value=[[0.1, 0.2]])
     mock_vector_store = MagicMock(spec=VectorStore)
-    indexer = RepoIndexer(mock_github, mock_chunker, mock_embedder, mock_vector_store)
+    mock_vector_store_factory = MagicMock(return_value=mock_vector_store)
+    indexer = RepoIndexer(
+        mock_github, mock_chunker, mock_embedder, mock_vector_store_factory
+    )
     return indexer, mock_github, mock_chunker, mock_embedder, mock_vector_store
 
 
@@ -38,7 +43,9 @@ class TestIndexRepository:
             [("a.py", "def foo():\n    return 1\n")]
         )
 
-        result = await indexer.index_repository("https://github.com/o/r", "token")
+        result = await indexer.index_repository(
+            "https://github.com/o/r", "token", "o__r"
+        )
 
         assert result.repo_url == "https://github.com/o/r"
         assert result.files_processed == 1
@@ -49,7 +56,7 @@ class TestIndexRepository:
             "a.py", "def foo():\n    return 1\n", "python"
         )
         mock_embedder.embed_chunks.assert_called_once_with([_SAMPLE_CHUNK])
-        mock_vector_store.add_chunks.assert_called_once_with(
+        mock_vector_store.add_chunks.assert_awaited_once_with(
             [_SAMPLE_CHUNK], [[0.1, 0.2]]
         )
 
@@ -60,7 +67,9 @@ class TestIndexRepository:
             [("big.py", big_content), ("small.py", small_content)]
         )
 
-        result = await indexer.index_repository("https://github.com/o/r", "token")
+        result = await indexer.index_repository(
+            "https://github.com/o/r", "token", "o__r"
+        )
 
         assert result.files_processed == 2
         assert result.chunks_created == 1
@@ -75,7 +84,9 @@ class TestIndexRepository:
             [("README.md", readme_content), ("a.py", source_content)]
         )
 
-        result = await indexer.index_repository("https://github.com/o/r", "token")
+        result = await indexer.index_repository(
+            "https://github.com/o/r", "token", "o__r"
+        )
 
         assert result.files_processed == 2
         assert result.chunks_created == 1
@@ -90,4 +101,54 @@ class TestIndexRepository:
         )
 
         with pytest.raises(RepoNotFoundError):
-            await indexer.index_repository("https://github.com/o/missing", "token")
+            await indexer.index_repository(
+                "https://github.com/o/missing", "token", "o__missing"
+            )
+
+    async def test_reports_each_stage_in_order(self) -> None:
+        indexer, _, _, _, _ = _make_indexer([("a.py", "def foo():\n    return 1\n")])
+        reported_stages: list[IndexingStage] = []
+
+        async def record_stage(stage: IndexingStage) -> None:
+            reported_stages.append(stage)
+
+        await indexer.index_repository(
+            "https://github.com/o/r", "token", "o__r", on_stage=record_stage
+        )
+
+        assert reported_stages == [
+            IndexingStage.FETCHING,
+            IndexingStage.CHUNKING,
+            IndexingStage.EMBEDDING,
+            IndexingStage.STORING,
+        ]
+
+    async def test_reindexing_removes_stale_chunks(self, tmp_path: Path) -> None:
+        source_content = "def foo():\n    return 1\n"
+        mock_github = MagicMock(spec=GitHubService)
+        mock_github.fetch_repo_files = AsyncMock(
+            side_effect=[[("old.py", source_content)], [("new.py", source_content)]]
+        )
+        mock_chunker = MagicMock(spec=CodeChunker)
+        mock_chunker.chunk_file = MagicMock(
+            side_effect=lambda file_path, content, language: [
+                Chunk(content, file_path, 1, 2, language)
+            ]
+        )
+        mock_embedder = MagicMock(spec=Embedder)
+        mock_embedder.embed_chunks = AsyncMock(
+            side_effect=lambda chunks: [[1.0, 0.0]] * len(chunks)
+        )
+        vector_store = VectorStore("o__r", str(tmp_path))
+        indexer = RepoIndexer(
+            mock_github, mock_chunker, mock_embedder, lambda _name: vector_store
+        )
+
+        await indexer.index_repository("https://github.com/o/r", "token", "o__r")
+        await indexer.index_repository("https://github.com/o/r", "token", "o__r")
+
+        stored_file_paths = [
+            chunk.file_path
+            for chunk in await vector_store.search([1.0, 0.0], n_results=10)
+        ]
+        assert stored_file_paths == ["new.py"]
