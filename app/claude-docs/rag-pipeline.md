@@ -11,7 +11,7 @@ Indexing embeds a repository's source; PR review retrieves relevant chunks as co
 | Orchestrate | `RepoIndexer` (`indexer.py`) | Runs fetch → chunk → embed → store, awaits the async `on_stage` callback as each `IndexingStage` starts |
 | Job | `create_indexing_job` / `get_latest_indexing_job` / `run_indexing_job` (`indexing_jobs.py`) | `POST /index/repo` → row in `indexing_jobs` + 202 + `BackgroundTasks`; `GET /index/status/{repo_id}` reads the newest row |
 | Retrieve | `CodeRetriever.retrieve` (`retriever.py`) | Embeds the query, returns the top `k` (default 5) chunks; `[]` if the repo has no index or embedding fails |
-| Augment | `CodeReviewer.review_pr_with_context` (`reviewer.py`) | Asks `CodeRetriever` for chunks for the diff, prepends them to the review message |
+| Augment | `ContextBuilder.build` (`context_builder.py`), called by `CodeReviewer.review_pr_with_context` | Asks `CodeRetriever` for chunks for the diff, fits them to `MAX_CONTEXT_CHARS`, formats them; the reviewer prepends them to the review message |
 
 ## Rules
 1. **`Chunk` is the only unit passed between stages.** Extend or wrap it — never introduce a parallel "snippet"/"fragment" type
@@ -22,5 +22,5 @@ Indexing embeds a repository's source; PR review retrieves relevant chunks as co
 6. **Re-indexing is idempotent.** Vector IDs are `{file_path}:{start_line}:{end_line}`, so upserts overwrite; call `delete_collection()` before a full re-index
 7. **Sync Chroma calls never block the event loop** — they run via `asyncio.to_thread`
 8. **Context is optional.** `CodeRetriever.retrieve` returns `[]` when the collection is missing/empty or the query embedding fails (logged at WARNING); `review_pr_with_context` then falls back to `review_pr_diff`, as it does when no retriever is injected. `VectorStoreError` still propagates
-9. **Retrieval never happens inside the reviewer.** `CodeReviewer` never touches `Embedder` or `VectorStore` — it receives a `CodeRetriever` and calls `retrieve`. Any new consumer of codebase context (e.g. V5 agent tools) goes through `CodeRetriever` too
+9. **Retrieval never happens inside the reviewer.** `CodeReviewer` and `ContextBuilder` never touch `Embedder` or `VectorStore` — the reviewer receives a `CodeRetriever`, and `ContextBuilder` calls its `retrieve`. Any new consumer of codebase context (e.g. V5 agent tools) goes through `CodeRetriever` too
 10. **One `Embedder`, explicit wiring.** `main.py`'s lifespan builds a single `Embedder` shared by `RepoIndexer` and `CodeRetriever`; both take `embedder` and `vector_store_factory` as required constructor args (no defaults), so tests inject fakes

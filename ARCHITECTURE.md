@@ -120,7 +120,7 @@ AppError
 - **The exposure policy is declarative.** Expected, user-fixable errors show their message. Infra failures hide it behind `user_message`. `debug_context` is logged but never sent to the client.
 - **Services own translation.** They map external failures, such as an HTTP status (`raise_for_github_response`) or an SDK error, to the right subclass. Raw `httpx`/SDK exceptions never reach a route.
 
-**Known exception:** streaming (`CodeReviewer.review_stream`) logs inline before re-raising. Once bytes have been sent, the central handler can no longer send a clean JSON error.
+**Known exception:** streaming (`ClaudeClient.stream_text`, behind `CodeReviewer.review_stream`) logs inline before re-raising. Once bytes have been sent, the central handler can no longer send a clean JSON error.
 
 Full rules: `app/claude-docs/error-handling.md`.
 
@@ -246,7 +246,7 @@ Every item in those four lists is a `Finding` (`app/models/review.py`):
 
 ```
 submit_code_review tool call: four arrays of finding objects (no id, no category)
-   ▼  CodeReviewer: tag each item with its array's category; Finding.model_validate generates the id
+   ▼  ReviewParser: tag each item with its array's category; Finding.model_validate generates the id
    │    invalid item (missing field, wrong type, plain string) → MalformedAIResponseError
    ▼  StructuredReview (domain) → StructuredReviewResponse.from_domain → JSON (absent fields → null)
    ▼  Frontend: FindingSchema (Zod) → mapToFinding → Finding { lineStart, lineEnd, … }
@@ -261,7 +261,7 @@ submit_code_review tool call: four arrays of finding objects (no id, no category
 
 **Trade-offs:**
 
-- **One invalid finding fails the whole review.** Claude has been seen omitting required tool fields (see the TODO in `reviewer.py`), so check this rate with a live test.
+- **One invalid finding fails the whole review.** Claude has been seen omitting required tool fields (see the TODO in `review_parser.py`), so check this rate with a live test.
 - **Line numbers are inferred by Claude** and aren't checked against the diff yet. Treat them as best-effort until something validates them.
 - **The category is stored twice:** implied by the list a finding is in, and explicit on the finding. The explicit field keeps a finding self-describing once it leaves its list, for example as an agent tool result or a PR comment.
 
@@ -346,14 +346,14 @@ Conventions: `app/CLAUDE.md` → *Database* and *Review Jobs*.
 | `language` | 500 | `ReviewRequest` | `422` |
 | `pr_url` | 500 | `PRReviewRequest` | `422` |
 | PR diff | 100,000 | `GitHubService.fetch_pr_diff` | Truncated, before it is embedded or sent to Claude |
-| Retrieved context | 20,000 | `CodeReviewer` (`_fit_context_budget`) | Lowest-ranked chunks dropped first |
+| Retrieved context | 20,000 | `ContextBuilder` (`_fit_context_budget`) | Lowest-ranked chunks dropped first |
 | Embedding query | 10,000 | `Embedder.embed_query` | Truncated |
 
 - **Reject what the client sends, truncate what the server builds.** A user can shorten an oversized field, so the request gets a `422`. A large diff, context or query is not the user's mistake, so the review still runs on a truncated input. Each truncation logs a WARNING.
 - **Context keeps the most relevant chunks.** `CodeRetriever` returns chunks most similar first. `CodeReviewer` keeps the longest prefix of them that fits, so the least relevant chunks go first. If not even the top chunk fits, the review falls back to the diff alone (§5.2).
 - **The caps are measured in characters, not tokens.** Counting characters is free and needs no API call. At about 3–4 characters per token, a worst-case PR review (100k diff + 20k context) stays around 30–40k input tokens, well inside Sonnet's context window.
 
-**Cost:** `_log_usage` in `reviewer.py` prices each call's `usage` (input, output, cache write, cache read) with the `ANTHROPIC_*_COST_PER_MTOK_USD` constants for `ANTHROPIC_MODEL` (`claude-sonnet-4-6`: $3 / $15 per million input / output tokens). It logs the result as `cost_usd`.
+**Cost:** `_log_usage` in `claude_client.py` prices each call's `usage` (input, output, cache write, cache read) with the `ANTHROPIC_*_COST_PER_MTOK_USD` constants for `ANTHROPIC_MODEL` (`claude-sonnet-4-6`: $3 / $15 per million input / output tokens). It logs the result as `cost_usd`.
 
 **Daily budget:** `CostBudget` (`app/services/cost_budget.py`) enforces `Settings.daily_cost_budget_usd` (`DAILY_COST_BUDGET_USD`, default `$10`) on every Claude and Voyage AI call. Before a call it reads today's row in `daily_spend` (one row per UTC day: `day`, `spent_usd`, `updated_at`) and raises `BudgetExceededError` (`429`) once spend has reached the limit. After the call it adds the call's estimated cost with an atomic `INSERT … ON CONFLICT DO UPDATE`, so concurrent calls on any worker never lose an increment. Voyage calls are priced with `_EMBEDDING_COST_PER_MTOK_USD` in `embedder.py` ($0.18 per million tokens for `voyage-code-3`).
 
@@ -409,6 +409,7 @@ routes/index.py  POST /index/repo        ─▶ create_indexing_job ────
 - **Routes are thin.** They validate input through Pydantic models (`field_validator`), call services from `req.app.state`, and map the result to a response model. Routes contain no business logic, no `httpx`, and no `try`/`except`.
 - **Services own every external call.** Anthropic, GitHub and Voyage are all wrapped in `app/services/`. Services translate failures into `AppError` subclasses and log token usage.
 - **Singletons are created in the `lifespan`.** `CodeReviewer`, `CodeRetriever`, `RepoIndexer`, `GitHubService` and the DB `session_factory` live on `app.state` (services and factories only — never job state, see §3.8); one `Embedder` is shared by the indexer and the retriever. Tests replace them with `MagicMock(spec=...)` without patching imports.
+- **`CodeReviewer` is a thin orchestrator.** It builds the prompt and wires three single-purpose services: `ContextBuilder` (retrieve via `CodeRetriever`, fit `MAX_CONTEXT_CHARS`, format), `ClaudeClient` (the only place Claude is called: budget check and charge, SDK error mapping, usage and cost logging, truncation check) and `ReviewParser` (tool input → `StructuredReview`). V5's agent loop calls `ClaudeClient` directly, so every agent step gets the same budget and error handling.
 - **Prompts and tool schemas** (`app/prompts/review.py`) are kept apart from the code that calls the model.
 - **Constants** (`app/constants.py`) are the single source for model IDs, severities, and the extension-to-language map shared by fetch and index.
 

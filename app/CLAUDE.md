@@ -32,7 +32,10 @@ app/
 │   └── review.py        # System prompts, STRUCTURED_REVIEW_TOOL schema, ReviewToolOutput/FindingToolOutput
 ├── services/
 │   ├── __init__.py
-│   ├── reviewer.py      # CodeReviewer — all LLM calls; PR review consumes context from CodeRetriever
+│   ├── reviewer.py      # CodeReviewer — thin orchestrator: prompt + ContextBuilder → ClaudeClient → ReviewParser
+│   ├── claude_client.py # ClaudeClient — every Claude call: budget, error mapping, usage logging, truncation check
+│   ├── review_parser.py # ReviewParser — submit_code_review tool input → StructuredReview
+│   ├── context_builder.py # ContextBuilder — retrieve via CodeRetriever, fit MAX_CONTEXT_CHARS, format
 │   ├── github.py        # GitHubService — OAuth token exchange, PR URL parsing, diff fetch, repo file fetch
 │   ├── github_errors.py # raise_for_github_response, is_rate_limited
 │   ├── chunker.py       # CodeChunker + Chunk — splits source files for the RAG pipeline
@@ -110,7 +113,7 @@ app/
 - **SSE route shape:** `response_class=EventSourceResponse`, an async generator that yields `ServerSentEvent(data=<ReviewEventMessage>, id=str(event.id))`. Check the job exists in a function-scoped dependency, so a miss is a JSON 404 before the stream starts
 
 ## External API Calls
-- Every class that talks to an external API or SDK lives under `app/services/` — no exceptions, `CodeReviewer` included
+- Every class that talks to an external API or SDK lives under `app/services/` — no exceptions. Claude is only called through `ClaudeClient` (`claude_client.py`)
 - `httpx.AsyncClient` for all outbound HTTP — never the sync client, never `requests`; routes never call `httpx` directly
 - Service constructors accept an optional `transport: httpx.AsyncBaseTransport | None` (or an SDK `client`) so tests inject fakes
 - Translate status codes into domain exceptions inside the service, in one function called by every method (pattern: `raise_for_github_response` in `app/services/github_errors.py`)
@@ -121,8 +124,8 @@ app/
 - Streaming for text responses, `create()` with a tool schema for structured output
 - `cache_control: ephemeral` on every system prompt
 - Handle `RateLimitError` and `APIError` explicitly
-- Check `stop_reason` after every call through `_raise_if_truncated`: `max_tokens` raises `OutputTruncatedError`, never a partial result
-- Log token usage and approximate cost on every call through `_log_usage` in `reviewer.py`; never send more context than needed
+- **Every Claude call goes through `ClaudeClient`** (`call_tool` for forced tool calls, `stream_text` for streamed text). It checks and charges the cost budget, maps `RateLimitError`/`APIError`, logs usage and cost (`_log_usage`), and checks `stop_reason` (`_raise_if_truncated`: `max_tokens` raises `OutputTruncatedError`, never a partial result). Never call `AsyncAnthropic` directly from another service
+- Never send more context than needed
 - Pricing constants (`ANTHROPIC_*_COST_PER_MTOK_USD`) are for `ANTHROPIC_MODEL`, so change them whenever the model changes
 
 ## Input Caps & Cost Budget
@@ -134,12 +137,12 @@ app/
 | `ReviewRequest.language` | `MAX_LANGUAGE_CHARS` = 500 | `Field(max_length=...)` | `422` |
 | `PRReviewRequest.pr_url` | `MAX_PR_URL_CHARS` = 500 | `Field(max_length=...)` | `422` |
 | PR diff | `MAX_DIFF_CHARS` = 100,000 | `GitHubService.fetch_pr_diff` | Truncated, WARNING logged |
-| Retrieved context | `MAX_CONTEXT_CHARS` = 20,000 | `_fit_context_budget` in `reviewer.py` | Lowest-ranked chunks dropped, WARNING logged |
+| Retrieved context | `MAX_CONTEXT_CHARS` = 20,000 | `_fit_context_budget` in `context_builder.py` | Lowest-ranked chunks dropped, WARNING logged |
 | Embedding query | `MAX_QUERY_CHARS` = 10,000 | `Embedder.embed_query` | Truncated, WARNING logged |
 
 - **Client input is rejected and server-built input is truncated.** A user can fix an oversized request field, so it gets a `422`. A diff, context or query the server fetches or builds is cut down so the review still runs. Truncation logs at WARNING (a documented exception to "services never log", like retrieval)
 - **A new LLM or embedding call path needs a cap before it ships.** Add the constant to `app/constants.py`, enforce it at the boundary (Pydantic field for client input, the service for fetched or built input), and add a row here
-- **Every Claude and Voyage AI call is charged to the daily budget.** Call `CostBudget.ensure_available()` before the call and `CostBudget.record(cost_usd)` after it (before `_raise_if_truncated`). It raises `BudgetExceededError` (`429`) once today's spend reaches `settings.daily_cost_budget_usd` (env `DAILY_COST_BUDGET_USD`, default `10.0`). The running total is the `daily_spend` table, never memory. `CodeReviewer` and `Embedder` take the budget as a constructor argument; only tests leave it out. A new call path must go through it too
+- **Every Claude and Voyage AI call is charged to the daily budget.** Call `CostBudget.ensure_available()` before the call and `CostBudget.record(cost_usd)` after it (before `_raise_if_truncated`). It raises `BudgetExceededError` (`429`) once today's spend reaches `settings.daily_cost_budget_usd` (env `DAILY_COST_BUDGET_USD`, default `10.0`). The running total is the `daily_spend` table, never memory. `ClaudeClient` (via `CodeReviewer`) and `Embedder` take the budget as a constructor argument; only tests leave it out. A new call path must go through it too
 
 ## Review Findings
 Every item in `bugs`, `security_issues`, `suggestions` and `positives` is a `Finding` (`app/models/review.py`) — never a plain string. Contract and rationale: `ARCHITECTURE.md` §3.7.
@@ -154,9 +157,9 @@ Every item in `bugs`, `security_issues`, `suggestions` and `positives` is a `Fin
 | `suggestion` | `str \| None` | Claude |
 | `confidence` | `Confidence`: `low` / `medium` / `high` (required) | Claude |
 
-- **`id` and `category` are always set server-side, never by Claude.** Keep them out of `_FINDING_SCHEMA` and `FindingToolOutput`; `CodeReviewer` stamps the category from the list and `Finding` generates the ID. Never read either from tool input
+- **`id` and `category` are always set server-side, never by Claude.** Keep them out of `_FINDING_SCHEMA` and `FindingToolOutput`; `ReviewParser` stamps the category from the list and `Finding` generates the ID. Never read either from tool input
 - `_FINDING_SCHEMA` (tool JSON schema) and `FindingToolOutput` (its TypedDict mirror) in `app/prompts/review.py` change together — and together with `Finding` and the frontend `FindingSchema`
-- Build findings only through `Finding.model_validate` in `CodeReviewer`. A non-object item or a `ValidationError` becomes `MalformedAIResponseError` — never let a raw `TypeError`/`ValidationError` escape
+- Build findings only through `Finding.model_validate` in `ReviewParser` (`review_parser.py`). A non-object item or a `ValidationError` becomes `MalformedAIResponseError` — never let a raw `TypeError`/`ValidationError` escape
 - Adding a field: optional (`| None = None`) unless the review is useless without it — a required field Claude omits fails the whole review
 
 ## Code Quality
