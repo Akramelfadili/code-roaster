@@ -96,7 +96,7 @@ app/
 - A model change isn't live, even in development, until its migration exists — the app only ever runs migrations
 
 ## Review Jobs
-`POST /review/pr/async` → `reviews` row + `202 {job_id}` + `run_review_job` in `BackgroundTasks`; `GET /review/pr/{job_id}/events` streams the job over SSE. The synchronous `POST /review/pr` stays as is. Design and event table: `ARCHITECTURE.md` §3.9.
+`POST /review/pr/async` → `reviews` row + `202 {job_id}` + `run_review_job` in `BackgroundTasks`; `GET /review/pr/{job_id}/events` streams the job over SSE. The synchronous `POST /review/pr` stays as is. Design rationale: `ARCHITECTURE.md` §3.9.
 
 | Event `type` (`ReviewEventType`) | `data` |
 |---|---|
@@ -109,7 +109,7 @@ app/
 - **Write a state change and its event in one transaction** through `_record_events`. It also bumps `updated_at`, which keeps a live job from being swept
 - **Stored results carry `schema_version`.** `_mark_completed` writes `REVIEW_RESULT_SCHEMA_VERSION` next to `result`, and `_to_status` reports a result with any other version (or `NULL`) as `failed` with `REVIEW_RESULT_SCHEMA_OUTDATED_ERROR`, never validating it. Bump the constant whenever the stored `StructuredReviewResponse` shape changes incompatibly
 - **Every job ends with exactly one terminal event** (`completed` or `failed`); `stream_review_events` stops on it. A new failure path must go through `_mark_failed`, and a new sweep must append the `failed` event
-- **Adding an event type** (e.g. a V5 agent step): add it to `ReviewEventType` (no migration — `type` is a `VARCHAR`), document its `data` shape here and in `ARCHITECTURE.md` §3.9, and add it to the frontend schema when a client consumes it. Never reuse an existing type for a different payload
+- **Adding an event type** (e.g. a V5 agent step): add it to `ReviewEventType` (no migration — `type` is a `VARCHAR`), document its `data` shape here, and add it to the frontend schema when a client consumes it. Never reuse an existing type for a different payload
 - **The runner fetches the diff before it retrieves any context.** `repo_id` comes from the parsed PR URL, never from the client, and is only used once `fetch_pr_diff` has succeeded with the caller's token. The GitHub token is a background task argument, never stored on the row
 - **SSE route shape:** `response_class=EventSourceResponse`, an async generator that yields `ServerSentEvent(data=<ReviewEventMessage>, id=str(event.id))`. Check the job exists in a function-scoped dependency, so a miss is a JSON 404 before the stream starts
 

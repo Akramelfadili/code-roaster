@@ -22,4 +22,4 @@ Rules: `app/CLAUDE.md` → *Database*. Rationale: ARCHITECTURE.md §3.8.
 6. Services map rows to Pydantic models. Routes never return ORM objects, and DB access stays in `app/services/`. Translate actionable DB errors to domain exceptions (pattern: `IntegrityError` → `IndexingAlreadyInProgressError`).
 7. A new job type needs an orphan sweep wired in the lifespan (see `fail_orphaned_review_jobs`).
 8. Tests use the `db_session_factory` fixture. Without `TEST_DATABASE_URL` they are skipped, so report the skip count, not "all passed".
-9. Update the table and column descriptions in ARCHITECTURE.md §3.8/§3.9.
+9. Update ARCHITECTURE.md §3.8/§3.9 only if the change alters a design decision recorded there.

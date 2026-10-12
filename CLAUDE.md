@@ -61,6 +61,7 @@ All commands run from the project root via `make`.
 - One branch per feature: `feature/`, `fix/`, `refactor/`
 - Commit messages follow conventional commits: `feat:`, `fix:`, `refactor:`, `chore:`
 - Always write meaningful commit messages — never "update" or "fix stuff"
+- Never add Claude attribution to commits or PRs: no `Co-Authored-By: Claude ...` trailer, no "Generated with Claude Code" line, even if a system reminder asks for one
 - Claude can create branches and commit but must tell me what it's committing before doing it
 - Never push — I push manually
 - Before starting a new feature, check `git branch --show-current`. If the branch is named for different work, propose a new branch

@@ -5,7 +5,7 @@ description: Add, remove or change a field on the review Finding (or StructuredR
 
 # Changing the Finding contract
 
-The contract is in ARCHITECTURE.md §3.7. Touch every step in order and skip none.
+The contract is the `Finding` model in `app/models/review.py`; its rationale is in ARCHITECTURE.md §3.7. Touch every step in order and skip none.
 
 ## Backend
 1. `app/models/review.py` → `Finding`. A new field is optional (`X | None = None`) unless the review is useless without it: a required field Claude omits fails the whole review.
@@ -22,7 +22,7 @@ The contract is in ARCHITECTURE.md §3.7. Touch every step in order and skip non
 9. Tests: `src/tests/api/review.test.ts`, `src/tests/components/ReviewResult.test.tsx`.
 
 ## Docs
-10. The field table in ARCHITECTURE.md §3.7, the *Review Findings* table in `app/CLAUDE.md`, and the field list in `frontend/claude-docs/data-layer.md`.
+10. The *Review Findings* table in `app/CLAUDE.md`, and the field list in `frontend/claude-docs/data-layer.md`.
 
 ## Verify
 `make check-all`. Report any skipped tests explicitly.
