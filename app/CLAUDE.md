@@ -24,7 +24,8 @@ app/
 │   ├── review_job.py    # ReviewJobCreated, ReviewJobStatus, ReviewEventMessage (the SSE payload)
 │   └── db/              # SQLAlchemy ORM tables — importing the package registers them on Base.metadata
 │       ├── indexing.py  # IndexingJob (`indexing_jobs` table)
-│       └── review.py    # ReviewJob (`reviews`) + ReviewEvent (`review_events`, the job's event log)
+│       ├── review.py    # ReviewJob (`reviews`) + ReviewEvent (`review_events`, the job's event log)
+│       └── spend.py     # DailySpend (`daily_spend`) — AI spend per UTC day, for the cost budget
 ├── migrations/          # Alembic env.py, script template, versions/ — config in root alembic.ini
 ├── prompts/
 │   ├── __init__.py
@@ -36,6 +37,7 @@ app/
 │   ├── github_errors.py # raise_for_github_response, is_rate_limited
 │   ├── chunker.py       # CodeChunker + Chunk — splits source files for the RAG pipeline
 │   ├── embedder.py      # Embedder — Chunks → vectors via Voyage AI
+│   ├── cost_budget.py   # CostBudget — checks and records daily AI spend in Postgres
 │   ├── vector_store.py  # VectorStore — persists and searches embeddings via Chroma
 │   ├── indexer.py       # RepoIndexer + IndexingResult — fetch → chunk → embed → store
 │   ├── retriever.py     # CodeRetriever — query → embed → search; the only place retrieval happens
@@ -137,7 +139,7 @@ app/
 
 - **Client input is rejected and server-built input is truncated.** A user can fix an oversized request field, so it gets a `422`. A diff, context or query the server fetches or builds is cut down so the review still runs. Truncation logs at WARNING (a documented exception to "services never log", like retrieval)
 - **A new LLM or embedding call path needs a cap before it ships.** Add the constant to `app/constants.py`, enforce it at the boundary (Pydantic field for client input, the service for fetched or built input), and add a row here
-- **Cost is logged, not yet enforced.** `settings.daily_cost_budget_usd` (env `DAILY_COST_BUDGET_USD`, default `10.0`) and `BudgetExceededError` (`429`, `user_message` "Request exceeds cost budget.") exist, but nothing sums spend or raises the error yet. When enforcement lands, the running total goes in Postgres, never in memory (see *Database*)
+- **Every Claude and Voyage AI call is charged to the daily budget.** Call `CostBudget.ensure_available()` before the call and `CostBudget.record(cost_usd)` after it (before `_raise_if_truncated`). It raises `BudgetExceededError` (`429`) once today's spend reaches `settings.daily_cost_budget_usd` (env `DAILY_COST_BUDGET_USD`, default `10.0`). The running total is the `daily_spend` table, never memory. `CodeReviewer` and `Embedder` take the budget as a constructor argument; only tests leave it out. A new call path must go through it too
 
 ## Review Findings
 Every item in `bugs`, `security_issues`, `suggestions` and `positives` is a `Finding` (`app/models/review.py`) — never a plain string. Contract and rationale: `ARCHITECTURE.md` §3.7.

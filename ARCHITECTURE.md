@@ -269,7 +269,7 @@ Conventions: `app/CLAUDE.md` → *Review Findings*, `frontend/claude-docs/data-l
 
 ### 3.8 Postgres for all job state (SQLAlchemy async + Alembic)
 
-**Decision:** every piece of job state — indexing and review jobs today, agent runs in V5 — lives in **Postgres**, **never in process memory** (`app.state`, module globals, caches). Each job is a row; services read and write it through an `AsyncSession`.
+**Decision:** every piece of job state — indexing and review jobs today, agent runs in V5 — and the shared daily spend total (§3.10) live in **Postgres**, **never in process memory** (`app.state`, module globals, caches). Each job is a row; services read and write it through an `AsyncSession`.
 
 **Why:**
 
@@ -355,7 +355,12 @@ Conventions: `app/CLAUDE.md` → *Database* and *Review Jobs*.
 
 **Cost:** `_log_usage` in `reviewer.py` prices each call's `usage` (input, output, cache write, cache read) with the `ANTHROPIC_*_COST_PER_MTOK_USD` constants for `ANTHROPIC_MODEL` (`claude-sonnet-4-6`: $3 / $15 per million input / output tokens). It logs the result as `cost_usd`.
 
-**Not enforced yet:** `Settings.daily_cost_budget_usd` (`DAILY_COST_BUDGET_USD`, default `$10`) and `BudgetExceededError` (`429`) are defined, but nothing adds up spend across requests or raises the error yet. Enforcing the budget needs a running total that every worker shares. By §3.8 that total belongs in Postgres (e.g. a per-day spend row updated after each call, checked before each call), so it lands as its own change, before V5.
+**Daily budget:** `CostBudget` (`app/services/cost_budget.py`) enforces `Settings.daily_cost_budget_usd` (`DAILY_COST_BUDGET_USD`, default `$10`) on every Claude and Voyage AI call. Before a call it reads today's row in `daily_spend` (one row per UTC day: `day`, `spent_usd`, `updated_at`) and raises `BudgetExceededError` (`429`) once spend has reached the limit. After the call it adds the call's estimated cost with an atomic `INSERT … ON CONFLICT DO UPDATE`, so concurrent calls on any worker never lose an increment. Voyage calls are priced with `_EMBEDDING_COST_PER_MTOK_USD` in `embedder.py` ($0.18 per million tokens for `voyage-code-3`).
+
+- **It is a soft limit.** A call's cost is only known once it returns, so calls already in flight when the limit is reached can push spend slightly past it.
+- **Truncated calls are charged too.** Spend is recorded before `_raise_if_truncated`, since the tokens were billed anyway.
+- **A stream that fails mid-way isn't charged.** Its usage is only known from the final message.
+- **Where the error lands:** the HTTP routes return `429`; a background job records `client_message` (`failed` event for review jobs); an indexing run stops at the batch that hits the limit; the streaming route breaks off its stream, as for any mid-stream error (§3.1).
 
 **Trade-offs:**
 
@@ -501,7 +506,7 @@ Still open:
 | Version | Scope | Architectural impact |
 |---|---|---|
 | **V4 (in progress)** | RAG codebase indexing: an indexing endpoint using background tasks (§3.6) and retrieval-augmented reviews (§5.2). | New routes; `RepoIndexer`, `Embedder` and `VectorStore` wired into `lifespan`; the review prompt gains a context section. |
-| **V5: Agents** | The reviewer moves from single-shot calls to an agent loop that decides for itself what to inspect, using tools such as search the index, read a file, or fetch related PRs. | `CodeReviewer` evolves into a tool-using agent. The RAG services become agent tools. Error handling covers multi-step runs through typed errors in §3.1 (`ToolExecutionError` goes back to the model so the loop can recover; the step limit, budget, timeout, cancellation and context-size errors end the run with a `failed` event). Token and cost logging must cover multi-step runs too, and the daily cost budget (§3.10) must be enforced before agents ship. Runs reuse the review-job pattern (§3.9): each agent step is a new `review_events` type, streamed over the existing SSE endpoint. |
+| **V5: Agents** | The reviewer moves from single-shot calls to an agent loop that decides for itself what to inspect, using tools such as search the index, read a file, or fetch related PRs. | `CodeReviewer` evolves into a tool-using agent. The RAG services become agent tools. Error handling covers multi-step runs through typed errors in §3.1 (`ToolExecutionError` goes back to the model so the loop can recover; the step limit, budget, timeout, cancellation and context-size errors end the run with a `failed` event). Token and cost logging must cover multi-step runs too; the daily cost budget (§3.10) already applies to every call an agent makes. Runs reuse the review-job pattern (§3.9): each agent step is a new `review_events` type, streamed over the existing SSE endpoint. |
 | **V6: Deployment** | Production hosting. | Revisit: token transport and storage (§2 Auth); moving Chroma from local disk to a hosted vector store; moving `BackgroundTasks` to a durable job queue with heartbeats (job state is already in Postgres, §3.8; it would replace the timeout-based orphan sweep, §3.6); CORS and `frontend_url` per environment; secrets management beyond `.env`. |
 
 ---

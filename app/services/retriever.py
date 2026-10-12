@@ -60,6 +60,9 @@ class CodeRetriever:
 
         Raises:
             VectorStoreError: If Chroma fails to read or search the collection.
+            BudgetExceededError: If the daily cost budget blocks the query
+                embedding. Unlike other embedding failures it propagates, since
+                the review call that follows would be blocked too.
         """
         vector_store = self._vector_store_factory(repo_id)
         if not await vector_store.collection_exists():

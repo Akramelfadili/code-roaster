@@ -22,7 +22,7 @@ Agent loops need typed failures, not generic 500s, so the loop (or the job runne
 | `OutputTruncatedError` (`ReviewError`) | 500 | ERROR | `stop_reason == "max_tokens"` on any Claude call (`_raise_if_truncated` in `reviewer.py`) | Propagates — a partial review is never returned |
 | `ToolExecutionError` | 200 | WARNING | An agent tool fails | **Never raised to the HTTP layer.** The loop catches it and sends `client_message` back to the model as a `tool_result` with `is_error=True` so the model can recover |
 | `AgentStepLimitExceededError` | 429 | WARNING | A run hits its maximum step count | Ends the run |
-| `BudgetExceededError` | 429 | WARNING | A call would exceed the daily cost budget (not yet enforced) | Ends the run |
+| `BudgetExceededError` | 429 | WARNING | Today's spend has reached the daily cost budget (`CostBudget.ensure_available`, before every Claude and Voyage AI call) | Ends the run |
 | `RunTimeoutError` | 504 | WARNING | A run exceeds its wall-clock limit | Ends the run |
 | `RunCancelledError` | 499 | WARNING | A run is cancelled (499 = client closed request) | Ends the run |
 | `ContextTooLargeError` | 413 | WARNING | The context a step would send exceeds the maximum size | Ends the run, unless the loop can trim the context and retry |

@@ -17,6 +17,7 @@ from app.routes.index import router as index_router
 from app.routes.pr import router as pr_router
 from app.routes.review import router as review_router
 from app.services.chunker import CodeChunker
+from app.services.cost_budget import CostBudget
 from app.services.embedder import Embedder
 from app.services.github import GitHubService
 from app.services.indexer import RepoIndexer
@@ -54,7 +55,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         client_id=settings.github_client_id,
         client_secret=settings.github_client_secret,
     )
-    embedder = Embedder()
+    budget = CostBudget(SessionFactory, settings.daily_cost_budget_usd)
+    embedder = Embedder(budget=budget)
     app.state.indexer = RepoIndexer(
         github_service=app.state.github_service,
         chunker=CodeChunker(),
@@ -64,7 +66,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.retriever = CodeRetriever(
         embedder=embedder, vector_store_factory=VectorStore
     )
-    app.state.reviewer = CodeReviewer(retriever=app.state.retriever)
+    app.state.reviewer = CodeReviewer(retriever=app.state.retriever, budget=budget)
     yield
     await engine.dispose()
 

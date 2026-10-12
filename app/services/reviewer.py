@@ -22,6 +22,7 @@ from app.constants import (
 from app.exceptions import (
     AIProviderError,
     AIProviderRateLimitError,
+    BudgetExceededError,
     MalformedAIResponseError,
     OutputTruncatedError,
 )
@@ -34,6 +35,7 @@ from app.prompts.review import (
     ReviewToolOutput,
 )
 from app.services.chunker import Chunk
+from app.services.cost_budget import CostBudget
 from app.services.retriever import CodeRetriever
 
 logger = logging.getLogger(__name__)
@@ -179,6 +181,7 @@ class CodeReviewer:
         self,
         client: anthropic.AsyncAnthropic | None = None,
         retriever: CodeRetriever | None = None,
+        budget: CostBudget | None = None,
     ) -> None:
         """Create a reviewer.
 
@@ -187,12 +190,23 @@ class CodeReviewer:
                 ``settings.anthropic_api_key``; pass a fake in tests.
             retriever: Supplies codebase context for PR reviews. Without one,
                 `review_pr_with_context` reviews the diff alone.
+            budget: Checked before and charged after every Claude call. Only
+                tests leave it out, which disables enforcement.
         """
         self.client = client or anthropic.AsyncAnthropic(
             api_key=settings.anthropic_api_key
         )
         self.model = ANTHROPIC_MODEL
         self.retriever = retriever
+        self.budget = budget
+
+    async def _ensure_budget_available(self) -> None:
+        if self.budget is not None:
+            await self.budget.ensure_available()
+
+    async def _record_spend(self, usage: Usage) -> None:
+        if self.budget is not None:
+            await self.budget.record(_estimate_cost_usd(usage))
 
     def _build_review_message(self, code: str, language: str) -> str:
         if language == _AUTO_LANGUAGE:
@@ -205,6 +219,7 @@ class CodeReviewer:
     async def review_structured(
         self, code: str, language: str = "python"
     ) -> StructuredReview:
+        await self._ensure_budget_available()
         try:
             response = await self.client.messages.create(
                 model=self.model,
@@ -231,6 +246,7 @@ class CodeReviewer:
             raise AIProviderError("Anthropic API call failed") from e
 
         _log_usage("structured", response.usage)
+        await self._record_spend(response.usage)
         _raise_if_truncated(response.stop_reason)
 
         tool_use_block = next(
@@ -293,6 +309,7 @@ class CodeReviewer:
         self, code: str, language: str = "python"
     ) -> AsyncIterator[str]:
         try:
+            await self._ensure_budget_available()
             async with self.client.messages.stream(
                 model=self.model,
                 max_tokens=ANTHROPIC_MAX_TOKENS,
@@ -314,9 +331,13 @@ class CodeReviewer:
                     yield text
                 final_message = await stream.get_final_message()
                 _log_usage("stream", final_message.usage)
+                await self._record_spend(final_message.usage)
                 _raise_if_truncated(final_message.stop_reason)
         except OutputTruncatedError as e:
             logger.error(f"Streamed review was truncated: {e}")
+            raise
+        except BudgetExceededError as e:
+            logger.warning(f"Streamed review blocked by the cost budget: {e}")
             raise
         except anthropic.RateLimitError as e:
             # The client's exception handler can't cleanly turn this into a JSON
