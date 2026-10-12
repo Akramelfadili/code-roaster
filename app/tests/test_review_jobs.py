@@ -1,5 +1,6 @@
 import asyncio
 from datetime import timedelta
+from unittest.mock import MagicMock
 from uuid import UUID
 
 import pytest
@@ -9,13 +10,23 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.constants import (
     REVIEW_JOB_ORPHANED_ERROR,
     REVIEW_JOB_TIMEOUT_SECONDS,
+    REVIEW_RESULT_SCHEMA_OUTDATED_ERROR,
+    REVIEW_RESULT_SCHEMA_VERSION,
     ReviewEventType,
     ReviewJobState,
 )
 from app.models.db import ReviewEvent, ReviewJob
+from app.models.review import StructuredReviewResponse
+from app.models.review_job import ReviewJobStatus
 from app.services import review_jobs
-from app.services.review_jobs import fail_orphaned_review_jobs, stream_review_events
-from app.tests.mocks import SAMPLE_PR_URL, SAMPLE_REPO_ID
+from app.services.review_jobs import (
+    create_review_job,
+    fail_orphaned_review_jobs,
+    get_review_job,
+    run_review_job,
+    stream_review_events,
+)
+from app.tests.mocks import SAMPLE_PR_URL, SAMPLE_REPO_ID, SAMPLE_STRUCTURED_REVIEW
 
 _PAST_TIMEOUT = timedelta(seconds=REVIEW_JOB_TIMEOUT_SECONDS + 60)
 _WITHIN_TIMEOUT = timedelta(seconds=REVIEW_JOB_TIMEOUT_SECONDS - 60)
@@ -37,6 +48,33 @@ async def _add_job(
         session.add(job)
         await session.commit()
     return job.id
+
+
+async def _add_completed_job(
+    session_factory: async_sessionmaker[AsyncSession],
+    result: dict[str, object],
+    schema_version: int | None,
+) -> UUID:
+    job = ReviewJob(
+        pr_url=SAMPLE_PR_URL,
+        repo_id=SAMPLE_REPO_ID,
+        state=ReviewJobState.COMPLETED,
+        result=result,
+        schema_version=schema_version,
+    )
+    async with session_factory() as session:
+        session.add(job)
+        await session.commit()
+    return job.id
+
+
+async def _read_job_status(
+    session_factory: async_sessionmaker[AsyncSession], job_id: UUID
+) -> ReviewJobStatus:
+    async with session_factory() as session:
+        status = await get_review_job(session, job_id)
+    assert status is not None
+    return status
 
 
 async def _add_event(
@@ -172,3 +210,65 @@ class TestStreamReviewEvents:
             last_event_id = await session.scalar(select(func.max(ReviewEvent.id)))
 
         assert await _collect_types(db_session_factory, job_id, last_event_id) == []
+
+
+class TestReviewResultSchemaVersion:
+    _CURRENT_RESULT = StructuredReviewResponse.from_domain(
+        SAMPLE_STRUCTURED_REVIEW
+    ).model_dump(mode="json")
+
+    async def test_completed_job_stores_current_schema_version(
+        self,
+        db_session_factory: async_sessionmaker[AsyncSession],
+        mock_reviewer: MagicMock,
+        mock_github_service: MagicMock,
+    ) -> None:
+        async with db_session_factory() as session:
+            job = await create_review_job(session, SAMPLE_PR_URL, SAMPLE_REPO_ID)
+
+        await run_review_job(
+            mock_reviewer, mock_github_service, db_session_factory, job.id, "token"
+        )
+
+        stored = await _get_job(db_session_factory, job.id)
+        assert stored.schema_version == REVIEW_RESULT_SCHEMA_VERSION
+        status = await _read_job_status(db_session_factory, job.id)
+        assert status.state is ReviewJobState.COMPLETED
+        assert status.result is not None
+
+    async def test_result_without_schema_version_reads_as_outdated_failure(
+        self, db_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        job_id = await _add_completed_job(
+            db_session_factory, self._CURRENT_RESULT, schema_version=None
+        )
+
+        status = await _read_job_status(db_session_factory, job_id)
+
+        assert status.state is ReviewJobState.FAILED
+        assert status.error == REVIEW_RESULT_SCHEMA_OUTDATED_ERROR
+        assert status.result is None
+
+    async def test_mismatched_schema_version_reads_as_outdated_without_validating(
+        self, db_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        job_id = await _add_completed_job(
+            db_session_factory,
+            {"shape": "from another version"},
+            schema_version=REVIEW_RESULT_SCHEMA_VERSION + 1,
+        )
+
+        status = await _read_job_status(db_session_factory, job_id)
+
+        assert status.state is ReviewJobState.FAILED
+        assert status.error == REVIEW_RESULT_SCHEMA_OUTDATED_ERROR
+
+    async def test_job_without_result_is_not_marked_outdated(
+        self, db_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        job_id = await _add_job(db_session_factory, ReviewJobState.RUNNING)
+
+        status = await _read_job_status(db_session_factory, job_id)
+
+        assert status.state is ReviewJobState.RUNNING
+        assert status.error is None

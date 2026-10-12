@@ -107,6 +107,7 @@ app/
 
 - **Every step is an event in `review_events`. Never push events through memory** (no queues, no `asyncio.Event`s on `app.state`). The SSE stream only polls the table, which is what makes it work across workers and lets clients resume with `Last-Event-ID`
 - **Write a state change and its event in one transaction** through `_record_events`. It also bumps `updated_at`, which keeps a live job from being swept
+- **Stored results carry `schema_version`.** `_mark_completed` writes `REVIEW_RESULT_SCHEMA_VERSION` next to `result`, and `_to_status` reports a result with any other version (or `NULL`) as `failed` with `REVIEW_RESULT_SCHEMA_OUTDATED_ERROR`, never validating it. Bump the constant whenever the stored `StructuredReviewResponse` shape changes incompatibly
 - **Every job ends with exactly one terminal event** (`completed` or `failed`); `stream_review_events` stops on it. A new failure path must go through `_mark_failed`, and a new sweep must append the `failed` event
 - **Adding an event type** (e.g. a V5 agent step): add it to `ReviewEventType` (no migration — `type` is a `VARCHAR`), document its `data` shape here and in `ARCHITECTURE.md` §3.9, and add it to the frontend schema when a client consumes it. Never reuse an existing type for a different payload
 - **The runner fetches the diff before it retrieves any context.** `repo_id` comes from the parsed PR URL, never from the client, and is only used once `fetch_pr_diff` has succeeded with the caller's token. The GitHub token is a background task argument, never stored on the row

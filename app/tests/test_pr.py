@@ -5,9 +5,11 @@ from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.constants import ReviewEventType, ReviewStage
+from app.constants import ReviewEventType, ReviewJobState, ReviewStage
 from app.exceptions import GitHubAuthError, InvalidPRUrlError, PRNotFoundError
+from app.models.db import ReviewJob
 from app.models.pr import PullRequestRef
 from app.models.review import StructuredReview
 from app.tests.mocks import (
@@ -218,6 +220,24 @@ class TestReviewPrEvents:
             ReviewEventType.COMPLETED,
         ]
         assert events[-1]["data"]["score"] == SAMPLE_STRUCTURED_REVIEW.score  # type: ignore[index]
+
+    async def test_job_with_outdated_result_schema_still_streams(
+        self,
+        client: AsyncClient,
+        db_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        job = ReviewJob(
+            pr_url=SAMPLE_PR_URL,
+            state=ReviewJobState.COMPLETED,
+            result={"shape": "from before schema versions"},
+        )
+        async with db_session_factory() as session:
+            session.add(job)
+            await session.commit()
+
+        response = await client.get(f"/review/pr/{job.id}/events")
+
+        assert response.status_code == 200
 
     async def test_finding_events_carry_each_finding(self, client: AsyncClient) -> None:
         job_id = await _start_review_job(client)

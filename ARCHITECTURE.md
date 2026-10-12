@@ -301,7 +301,7 @@ Conventions: `app/CLAUDE.md` → *Database*.
 **How it is wired:**
 
 - **Two tables** (`app/models/db/review.py`):
-  - `reviews`: one row per job. Columns: `id`, `repo_id`, `pr_url`, `state` (`pending` → `running` → `completed` / `failed`), `result` (JSONB, the full `StructuredReviewResponse`), `error`, `created_at`, `updated_at`.
+  - `reviews`: one row per job. Columns: `id`, `repo_id`, `pr_url`, `state` (`pending` → `running` → `completed` / `failed`), `result` (JSONB, the full `StructuredReviewResponse`), `schema_version` (the version of that shape the result was written in), `error`, `created_at`, `updated_at`.
   - `review_events`: an append-only log. Columns: `id` (a global sequence), `review_id`, `type`, `data` (JSONB), `created_at`.
 - **The runner writes, the stream reads, and Postgres sits between them.** `run_review_job` appends an event at each step. A state change and its event are committed in one transaction. `stream_review_events` polls the log every 0.5 s for events newer than the last one it sent. Nothing passes through process memory (§3.8), so a client can follow a job running on another worker.
 - **Replay and resume.** Each SSE message carries `id: <event id>`. A new subscriber gets every event from the start. A reconnecting `EventSource` sends `Last-Event-ID` and resumes after it. The stream ends after the terminal event, or straight away if the job already finished and nothing newer exists.
@@ -329,6 +329,7 @@ Every job ends with exactly one terminal event. Failures follow the `run_indexin
 - **Polling, not push.** Events reach the client up to 0.5 s late, and each open stream runs one small query per poll. `LISTEN/NOTIFY` is the upgrade path if many streams are open at once.
 - **Clients must `close()` the `EventSource` on `completed`/`failed`.** Otherwise the browser reconnects after the stream ends. Each reconnect gets an empty stream that closes at once, so it is wasteful but harmless.
 - **No job listing, cancellation or retention** yet. Rows and events are kept forever.
+- **Stored results are versioned, events are not.** A completed job stores `schema_version = REVIEW_RESULT_SCHEMA_VERSION` (currently `1`) next to `result`. When the `StructuredReviewResponse` shape changes incompatibly, bumping the constant makes every older result (and any written before versions existed, `NULL`) read as `failed` with `error = "result schema outdated"` instead of failing validation with a `500`. The SSE replay still sends the stored `finding` and `completed` payloads as they were written.
 
 Conventions: `app/CLAUDE.md` → *Database* and *Review Jobs*.
 
