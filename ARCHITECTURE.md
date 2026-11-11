@@ -2,7 +2,7 @@
 
 > A living document. It explains **why** the system is shaped the way it is, not only what exists.
 > Conventions and step-by-step "how to" rules live in `CLAUDE.md`, `app/CLAUDE.md` and `frontend/CLAUDE.md`. This file links to them instead of repeating them.
-> Last reviewed: 2026-10-11 (branch `refactor/extract-code-retriever`).
+> Last reviewed: 2026-10-21 (branch `feature/v5-agent-design`).
 
 ---
 
@@ -81,7 +81,7 @@ Each finding is a structured object, not a sentence. It has a title, an explanat
 4. The SPA reads the token from the fragment, stores it in `sessionStorage`, and strips it from the URL.
 5. The token is sent in the request body for each PR review.
 
-**Trade-off:** the backend is **stateless**, with no sessions or database (the state cookie is the only server-issued state, and it lives in the browser), but the token passes through a URL fragment and lives in browser storage. That is acceptable for local and dev use. Revisit it for deployment (see §6).
+**Trade-off:** the backend is **stateless**, with no sessions or database (the state cookie is the only server-issued state, and it lives in the browser), but the token passes through a URL fragment and lives in browser storage. That is acceptable for local and dev use. Revisit it before deploying to production.
 
 ---
 
@@ -214,7 +214,7 @@ Details and thresholds: §5 and `app/claude-docs/rag-pipeline.md`.
 - `updated_at` only moves when a stage starts, so a single stage running longer than the timeout would be swept by a restarting worker. The swept job's runner would still write `completed` over the `failed` when it finishes.
 - Jobs share the web worker's resources.
 
-If these start to hurt (see §6), move execution to a real job queue; the `indexing_jobs` table stays as is.
+If these start to hurt, move execution to a real job queue; the `indexing_jobs` table stays as is.
 
 ### 3.7 Review response contract (`/review/*`): structured `Finding` objects
 
@@ -355,7 +355,7 @@ Conventions: `app/CLAUDE.md` → *Database* and *Review Jobs*.
 
 **Cost:** `_log_usage` in `reviewer.py` prices each call's `usage` (input, output, cache write, cache read) with the `ANTHROPIC_*_COST_PER_MTOK_USD` constants for `ANTHROPIC_MODEL` (`claude-sonnet-4-6`: $3 / $15 per million input / output tokens). It logs the result as `cost_usd`.
 
-**Not enforced yet:** `Settings.daily_cost_budget_usd` (`DAILY_COST_BUDGET_USD`, default `$10`) and `BudgetExceededError` (`429`) are defined, but nothing adds up spend across requests or raises the error yet. Enforcing the budget needs a running total that every worker shares. By §3.8 that total belongs in Postgres (e.g. a per-day spend row updated after each call, checked before each call), so it lands as its own change, before V5.
+**Not enforced yet:** `Settings.daily_cost_budget_usd` (`DAILY_COST_BUDGET_USD`, default `$10`) and `BudgetExceededError` (`429`) are defined, but nothing adds up spend across requests or raises the error yet. Enforcing the budget needs a running total that every worker shares. By §3.8 that total belongs in Postgres (e.g. a per-day spend row updated after each call, checked before each call), so it lands as its own change, before V5. It is build step 0 in `app/claude-docs/agent-design.md`.
 
 **Trade-offs:**
 
@@ -496,13 +496,89 @@ Still open:
 
 ---
 
-## 6. What's Coming
+## 6. Agent (V5)
 
-| Version | Scope | Architectural impact |
+> **Status: design, not yet implemented.** Nothing in this section exists in the code yet. Full design, tool rules and open decisions: `app/claude-docs/agent-design.md`.
+
+**Problem:** the V4 pipeline (§5) picks context **before** the model reasons, by similarity to the diff, and then makes one review call. Context that doesn't look like the diff is missed: callers of a changed function, multi-hop dependencies, config files that use a renamed key. V5 lets the model decide what to investigate.
+
+**V5 is a drop-in replacement for V4 behind the same contract.** It returns the same `StructuredReviewResponse` (§3.7), and the only change is one new optional field per finding, `evidence`.
+
+### 6.1 The run
+
+```
+run_review_job
+   ▼  fetch_pr_diff (caller's token)
+   ▼  async with checkout_pr_head(...) as repo_root     shallow fetch of the head SHA into a temp dir, always deleted
+   │    checkout fails ─▶ agent_failed(reason) ─▶ V4 single-shot review
+   │    async for event in agent.run(diff, repo_root):  async generator; each event → review_events → SSE
+   │       messages.create(full history, tool_choice = any | forced submit_review)
+   │         reply ─▶ tool_called (usage + running run_cost_usd)
+   │         read_file / search_codebase ─▶ sandboxed at repo_root ─▶ tool_result (errors as strings)
+   │         submit_review ─▶ validate (existing Finding path) ─▶ valid: review_ready
+   │                                                         └─▶ invalid: error tool_result, loop again
+   │       forced submit at step MAX_AGENT_STEPS (12) or when run_cost_usd + 2 × last reply's cost ≥ MAX_AGENT_RUN_COST_USD ($0.15)
+   │    review_ready ─▶ finding events + completed (as V4)
+   │    agent_failed ─▶ V4 single-shot review ─▶ finding events + completed
+```
+
+- **The PR head is checked out first.** This is a separate step before the loop:
+  - `git init`, then `git fetch --depth 1` of the PR's head SHA into a temp dir.
+  - An async context manager deletes the dir even on failure.
+  - A timeout and a maximum repo size apply.
+  - The authenticated URL and the token are never logged.
+  - If the checkout fails, the job falls back to V4 and emits `agent_failed` with a `reason`. Expected limits (`repo_too_large`, `auth_failed`, `timeout`) are kept apart from unexpected git errors (`checkout_failed`).
+  - Checkouts live under one dedicated checkout root. On startup, a sweep deletes only directories inside it that are older than 1 hour, so a restarting worker never deletes another worker's active checkout.
+- **An LLM in a loop.** Each step resends the full history plus the tool definitions, because the API is stateless. Every `tool_use` gets a matching `tool_result`. Cost per step grows with the context, so total cost grows faster than the number of steps.
+- **Three tools.**
+  - `read_file(path, start_line?, end_line?)` returns numbered lines, capped at 300.
+  - `search_codebase(query, is_regex?, path_glob?)` runs ripgrep, literal by default, capped at 30 hits.
+  - `submit_review` takes the current review shape and ends the run.
+
+  The diff is preloaded in the first message instead of fetched by a tool, since every run needs it.
+- **"Done" means a valid `submit_review`, never `end_turn`.** `tool_choice: any` on every step means the model always investigates or submits. Extended thinking is off in V5 v1, because it can't be combined with forced `tool_choice`.
+- **Graceful degradation.** Two triggers force `submit_review`:
+  - the last step (`MAX_AGENT_STEPS`)
+  - a cost projection: the running cost plus twice the last reply's cost would reach the per-run cap. The factor of 2 budgets for the forced submit and one repair.
+
+  The cap is a soft target: the projection is an estimate and the safety path always finishes, so a run can end somewhat above it. All budget values (steps, cost, wall-clock limit) are provisional, to be tuned from eval results.
+
+  If the forced review is invalid, there is one repair attempt, again forced. If the repair is still invalid, the agent emits `agent_failed` (`invalid_review`) and the job falls back to the V4 single-shot review. The worst case is a V4-quality review, never no review.
+- **Tools never raise.** A failure is returned to the model as an `is_error` `tool_result` it can adapt to (`ToolExecutionError`, §3.1). Invalid `submit_review` input is returned the same way, so the model can fix it and resubmit.
+- **Events are the trace.** The loop yields `step_started`, `tool_called`, `tool_finished`, `review_ready` and `agent_failed`. The job records them in `review_events` and the existing SSE endpoint forwards them (§3.9). None of them is terminal: every job still ends with one `completed` or `failed`. There is no separate trace file.
+- **One running cost total.** `tool_called` is emitted once right after each model reply and carries that reply's token usage and cost, plus the run's running total. The loop's cost-threshold check uses that same total, so what is enforced and what is recorded can't disagree. Cost is in USD, priced with the existing constants (§3.10).
+- **Agent and fallback cost are tracked separately.** The running total, and the cap, cover only the agent's calls. A V4 fallback's call is recorded as fallback cost. The `reviews` row stores both, and total job cost is reported as agent + fallback.
+
+### 6.2 How it relates to the V4 pipeline
+
+| | V4 (§5) | V5 |
 |---|---|---|
-| **V4 (in progress)** | RAG codebase indexing: an indexing endpoint using background tasks (§3.6) and retrieval-augmented reviews (§5.2). | New routes; `RepoIndexer`, `Embedder` and `VectorStore` wired into `lifespan`; the review prompt gains a context section. |
-| **V5: Agents** | The reviewer moves from single-shot calls to an agent loop that decides for itself what to inspect, using tools such as search the index, read a file, or fetch related PRs. | `CodeReviewer` evolves into a tool-using agent. The RAG services become agent tools. Error handling covers multi-step runs through typed errors in §3.1 (`ToolExecutionError` goes back to the model so the loop can recover; the step limit, budget, timeout, cancellation and context-size errors end the run with a `failed` event). Token and cost logging must cover multi-step runs too, and the daily cost budget (§3.10) must be enforced before agents ship. Runs reuse the review-job pattern (§3.9): each agent step is a new `review_events` type, streamed over the existing SSE endpoint. |
-| **V6: Deployment** | Production hosting. | Revisit: token transport and storage (§2 Auth); moving Chroma from local disk to a hosted vector store; moving `BackgroundTasks` to a durable job queue with heartbeats (job state is already in Postgres, §3.8; it would replace the timeout-based orphan sweep, §3.6); CORS and `frontend_url` per environment; secrets management beyond `.env`. |
+| Who picks context | Our code, by embedding similarity, before the call | The model, step by step, with tools |
+| Calls per review | 1 | Up to `MAX_AGENT_STEPS`, plus one repair attempt |
+| Source of code | Chroma chunks of the **default branch** | The **PR head**, shallow-cloned at `repo_root` |
+| Search | Semantic (`voyage-code-3`) | Exact text or regex (ripgrep), semantic search as a later tool |
+| Output | `StructuredReviewResponse` (§3.7) | The same, with optional `evidence` per finding |
+| Setup needed | The repo indexed first (`POST /index/repo`) | None |
+
+- **V4 stays, as the baseline and as the fallback** (for a failed checkout or a failed repair). V5 has to beat it on bugs caught and false positives to justify its cost and latency, measured on an eval set of PRs with planted bugs.
+- **Known V4 limitation:** V4's context comes from the index of the default branch, not the PR head. New or moved code in the PR is missing from it, and it can show code the PR has already changed. So the evals run three contenders:
+  - **V4**
+  - **V4 + PR head:** V4 retrieving from an index of the PR head; eval-only for now
+  - **V5**
+
+  V4 vs V4 + PR head isolates the gain from reading the right code. V4 + PR head vs V5 isolates the gain from the agent loop.
+- **Reused as is:**
+  - review jobs and SSE (§3.9), with five new `review_events` types
+  - the agent error classes (§3.1)
+  - `Finding` validation (§3.7)
+  - input caps and cost logging (§3.10)
+  - prompt caching (§2)
+- **The RAG index becomes a tool later.** A `semantic_search` tool would sit next to ripgrep and go through `CodeRetriever`, like every other consumer of the index (§3.5).
+
+### 6.3 Safety and cost
+
+- **Untrusted input in, untrusted arguments out.** The diff and every tool result are data, not instructions: the diff is wrapped in `<diff>` tags and the system prompt says so. The model picks tool arguments after reading them, so every argument is treated as malicious. Paths are sandboxed to `repo_root`, secret files are denied, nothing goes through a shell, and a query can never be read as a CLI flag. The rule is in `app/CLAUDE.md` → *Subprocesses & Untrusted Input*.
+- **Caching and truncation attack different halves of the cost.** Caching makes the fixed prefix cheap: the system prompt, tools and diff are the same on every step. Tool-result caps (300 lines, 30 hits) keep the growing tail small.
 
 ---
 

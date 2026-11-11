@@ -7,7 +7,6 @@ AI-powered code review tool. Users either paste code directly or connect their G
 - **Backend:** Python, FastAPI, Anthropic SDK (Claude Sonnet)
 - **Frontend:** React, TypeScript, Vite, Tailwind CSS, React Query
 - **AI:** Claude API (streaming + function calling)
-- **Package manager:** conda (backend), npm (frontend)
 
 ## Project Structure
 ```
@@ -53,7 +52,8 @@ All commands run from the project root via `make`.
 - Loaded exclusively through the backend's `Settings` (`app/config.py`) — see `app/CLAUDE.md`'s Configuration section
 
 ## Documentation
-- [ARCHITECTURE.md](ARCHITECTURE.md) — system overview, architecture decisions, RAG pipeline design. Read it on demand; update it when a decision or component changes
+- [ARCHITECTURE.md](ARCHITECTURE.md) — system overview, architecture decisions, RAG pipeline design, V5 agent design summary. Read it on demand; update it when a decision or component changes
+- [app/claude-docs/agent-design.md](app/claude-docs/agent-design.md) — V5 agent design: loop, tools, stopping, output schema, evals, open decisions
 - `docs/` holds the architecture diagrams (Excalidraw) — update them for major structural changes so they don't go stale
 
 ## Git Rules

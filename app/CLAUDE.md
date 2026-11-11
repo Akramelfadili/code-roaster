@@ -107,11 +107,32 @@ app/
 - **The runner fetches the diff before it retrieves any context.** `repo_id` comes from the parsed PR URL, never from the client, and is only used once `fetch_pr_diff` has succeeded with the caller's token. The GitHub token is a background task argument, never stored on the row
 - **SSE route shape:** `response_class=EventSourceResponse`, an async generator that yields `ServerSentEvent(data=<ReviewEventMessage>, id=str(event.id))`. Check the job exists in a function-scoped dependency, so a miss is a JSON 404 before the stream starts
 
+## Review Agent (V5)
+**Status: design, not yet implemented.** The PR reviewer becomes an agent: Claude in a loop that calls `read_file` and `search_codebase` (ripgrep) on a shallow clone of the PR head, then ends the run by calling `submit_review`. Agent runs are review jobs (see *Review Jobs*). The V4 single-call reviewer stays as the baseline and fallback. Design: `claude-docs/agent-design.md`. Summary: `ARCHITECTURE.md` §6.
+
+Proposed modules, flat like the rest of `app/`:
+- `services/agent.py`: the loop, an async generator that yields step events, plus step and cost budgets
+- `services/agent_tools.py`: the tool functions, plain Python with no LLM
+- `services/repo_checkout.py`: shallow clone of the PR head into a temp dir
+- `prompts/agent.py`: system prompt and tool schemas (`submit_review` reuses `_FINDING_SCHEMA`, since the output is the existing `Finding` contract)
+- `tests/test_agent.py`, `tests/test_agent_tools.py`, `tests/test_repo_checkout.py`. Run one file with `cd app && pytest tests/test_agent_tools.py`
+
+- **Every tool argument is malicious input.** The arguments are chosen by an LLM that has just read untrusted PR content, so a prompt injection can control them. *Subprocesses & Untrusted Input* applies to every tool
+- **Tools never raise.** A rejected argument or a failed tool returns an error string to the model (`ToolExecutionError` → `is_error` `tool_result`)
+
 ## External API Calls
 - Every class that talks to an external API or SDK lives under `app/services/` — no exceptions, `CodeReviewer` included
 - `httpx.AsyncClient` for all outbound HTTP — never the sync client, never `requests`; routes never call `httpx` directly
 - Service constructors accept an optional `transport: httpx.AsyncBaseTransport | None` (or an SDK `client`) so tests inject fakes
 - Translate status codes into domain exceptions inside the service, in one function called by every method (pattern: `raise_for_github_response` in `app/services/github_errors.py`)
+
+## Subprocesses & Untrusted Input
+**Rule: any path or argument built from untrusted input is malicious.** "Untrusted" covers anything that comes from a PR or a repo (diff, file contents, file paths, search hits), and anything an LLM chooses after reading it, such as agent tool arguments.
+- **Validate paths.** Reject absolute paths. Resolve the path, symlinks included, and require `resolved.is_relative_to(root.resolve())`. Deny secret files (`.env*`, keys, credentials) and `.git/`
+- **Never go through a shell.** Use `asyncio.create_subprocess_exec` with an argument list, never `shell=True` or a formatted command string, and always set a timeout. Suppress ruff's `S603`/`S607` per line with the reason, never file-wide
+- **Never let a value be parsed as a CLI flag.** Put `--` before positional values (`rg [opts] -- <query>`) and pass options as one `--opt=<value>` token. For ripgrep, `--pre=<cmd>` would run a command, and `-P` (PCRE2) is never passed, because the default engine runs in linear time
+- **Secrets never reach `argv`, a URL or a log.** Pass a token through the environment (e.g. git's `http.extraHeader` via `GIT_CONFIG_*`), never in an authenticated URL. Never log or raise a raw `CalledProcessError`, because its message includes the command line. Translate it into a domain exception with a fixed message
+- **Every check gets a test with a hostile input:** `../`, an absolute path, a symlink out of the root, a value starting with `-`
 
 ## Anthropic SDK Standards
 - Use `ANTHROPIC_MODEL` from `app/constants.py` (currently `claude-sonnet-4-6`) unless there's a specific reason not to
